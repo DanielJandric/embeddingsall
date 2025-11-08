@@ -50,16 +50,35 @@ def read_text_file(file_path, max_size_mb=10):
         return None
 
 
-def process_with_ocr(file_path, ocr_processor):
-    """Traite avec OCR"""
+def extract_pdf_text(file_path):
+    """Extrait le texte d'un PDF directement (sans OCR) - RAPIDE"""
     try:
-        if ocr_processor is None:
-            raise Exception("Azure OCR non disponible - vérifiez vos credentials")
+        from src.pdf_extractor import extract_text_from_pdf
+        return extract_text_from_pdf(file_path)
+    except Exception:
+        return None
 
-        size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        if size_mb > 50:
-            raise Exception(f"Fichier trop grand: {size_mb:.1f} MB (max 50 MB)")
 
+def process_pdf(file_path, ocr_processor):
+    """
+    Traite un PDF:
+    1. D'abord essaie d'extraire le texte directement (rapide, gratuit)
+    2. Si pas de texte, utilise Azure OCR (lent, pour scans)
+    """
+    # Étape 1: Extraction directe du texte
+    text = extract_pdf_text(file_path)
+    if text and len(text.strip()) > 100:  # Au moins 100 caractères
+        return text
+
+    # Étape 2: Fallback vers Azure OCR pour les PDFs scannés
+    if ocr_processor is None:
+        raise Exception("PDF scanné détecté mais Azure OCR non disponible")
+
+    size_mb = os.path.getsize(file_path) / (1024 * 1024)
+    if size_mb > 4:  # Limite Azure à 4MB pour éviter les erreurs
+        raise Exception(f"PDF trop grand pour OCR: {size_mb:.1f} MB (max 4 MB)")
+
+    try:
         result = ocr_processor.process_file(file_path)
         text = result.get('full_text', '')
 
@@ -83,8 +102,14 @@ def process_single_file(file_path, ocr_processor, embedding_generator, supabase_
             text = read_text_file(file_path)
             if not text:
                 raise Exception("Impossible de lire le fichier texte")
-        elif file_type in ['pdf', 'image']:
-            text = process_with_ocr(file_path, ocr_processor)
+        elif file_type == 'pdf':
+            text = process_pdf(file_path, ocr_processor)
+        elif file_type == 'image':
+            # Pour les images, utiliser directement OCR
+            if ocr_processor is None:
+                raise Exception("Azure OCR non disponible pour traiter les images")
+            result = ocr_processor.process_file(file_path)
+            text = result.get('full_text', '')
         else:
             # Essayer de lire comme texte pour les fichiers sans extension
             text = read_text_file(file_path)
