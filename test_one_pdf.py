@@ -15,9 +15,16 @@ print("TEST D'UN SEUL PDF")
 print("="*70)
 
 # Récupérer le premier PDF
-pdf_path = sys.argv[1] if len(sys.argv) > 1 else None
-if not pdf_path or not Path(pdf_path).exists():
+if len(sys.argv) < 2:
     print("❌ Usage: python test_one_pdf.py <chemin_vers_pdf>")
+    sys.exit(1)
+
+pdf_path = sys.argv[1]
+print(f"🔍 Chemin reçu: {pdf_path}")
+
+if not Path(pdf_path).exists():
+    print(f"❌ Le fichier n'existe pas: {pdf_path}")
+    print(f"   Vérifiez que le chemin est correct")
     sys.exit(1)
 
 print(f"\n📄 Fichier: {pdf_path}")
