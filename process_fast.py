@@ -42,6 +42,8 @@ def read_text_file(file_path, max_size_mb=10):
             try:
                 with open(file_path, 'r', encoding=encoding) as f:
                     content = f.read(max_size_mb * 1024 * 1024)
+                    # Nettoyer les caractères null
+                    content = content.replace('\u0000', '').replace('\x00', '')
                     return content
             except UnicodeDecodeError:
                 continue
