@@ -30,37 +30,50 @@ if not Path(pdf_path).exists():
 print(f"\n📄 Fichier: {pdf_path}")
 print(f"📏 Taille: {os.path.getsize(pdf_path) / (1024*1024):.2f} MB\n")
 
-# 1. Test Azure OCR
+# 1. Test Extraction du texte
 print("=" * 70)
-print("ÉTAPE 1 : Azure OCR")
+print("ÉTAPE 1 : Extraction du texte du PDF")
 print("=" * 70)
 
 try:
-    from src.azure_ocr import AzureOCRProcessor
-    print("✅ Module Azure importé")
+    # Méthode 1: Extraction directe (RAPIDE)
+    print("📖 Tentative d'extraction directe du texte (sans OCR)...")
+    from src.pdf_extractor import extract_text_from_pdf
 
-    ocr = AzureOCRProcessor()
-    print("✅ Client Azure initialisé")
+    text = extract_text_from_pdf(pdf_path)
 
-    print("\n⏳ Envoi du PDF à Azure OCR...")
-    print("   (Cela peut prendre 30-120 secondes, soyez patient !)")
-
-    result = ocr.process_file(pdf_path)
-
-    text = result.get('full_text', '')
-    print(f"\n✅ OCR terminé !")
-    print(f"   📝 Caractères extraits: {len(text)}")
-    print(f"   📄 Pages: {result.get('page_count', 0)}")
-
-    if text:
+    if text and len(text.strip()) > 100:
+        print(f"✅ Extraction directe réussie !")
+        print(f"   📝 Caractères extraits: {len(text)}")
         print(f"\n   Aperçu du texte (100 premiers caractères):")
         print(f"   {text[:100]}...")
     else:
-        print("   ⚠️  AUCUN texte extrait du PDF !")
-        sys.exit(1)
+        # Méthode 2: Azure OCR (fallback pour scans)
+        print("⚠️  Peu ou pas de texte trouvé")
+        print("\n🔍 Tentative avec Azure OCR (pour PDFs scannés)...")
+
+        from src.azure_ocr import AzureOCRProcessor
+        ocr = AzureOCRProcessor()
+
+        size_mb = os.path.getsize(pdf_path) / (1024 * 1024)
+        if size_mb > 4:
+            print(f"❌ PDF trop grand pour Azure OCR: {size_mb:.1f} MB (max 4 MB)")
+            print("   → Impossible de traiter ce PDF")
+            sys.exit(1)
+
+        print("   ⏳ Envoi à Azure OCR (30-120 secondes)...")
+        result = ocr.process_file(pdf_path)
+        text = result.get('full_text', '')
+
+        if text:
+            print(f"✅ OCR terminé !")
+            print(f"   📝 Caractères extraits: {len(text)}")
+        else:
+            print("❌ Aucun texte extrait même avec OCR")
+            sys.exit(1)
 
 except Exception as e:
-    print(f"\n❌ Erreur Azure OCR: {e}")
+    print(f"\n❌ Erreur d'extraction: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(1)
