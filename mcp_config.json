@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "documents-search": {
+      "command": "python",
+      "args": [
+        "/home/user/embeddingsall/mcp_server.py"
+      ],
+      "env": {
+        "PYTHONPATH": "/home/user/embeddingsall",
+        "OPENAI_API_KEY": "${OPENAI_API_KEY}",
+        "SUPABASE_URL": "${SUPABASE_URL}",
+        "SUPABASE_KEY": "${SUPABASE_KEY}"
+      }
+    }
+  }
+}

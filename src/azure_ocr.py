@@ -70,16 +70,21 @@ class AzureOCRProcessor:
         """
         logger.info(f"Extraction OCR de: {image_path}")
 
+        logger.info("Envoi de l'image à Azure OCR...")
         with open(image_path, "rb") as f:
             poller = self.client.begin_analyze_document(
                 model_id=model_id,
                 document=f
             )
 
+        logger.info("En attente de la réponse Azure OCR...")
         result = poller.result()
+        logger.info("Réponse Azure reçue !")
 
-        # Extraire le texte complet
+        # Extraire le texte complet et nettoyer les caractères null
         full_text = result.content
+        if full_text:
+            full_text = full_text.replace('\u0000', '').replace('\x00', '')
 
         # Extraire les pages et leurs contenus
         pages = []
@@ -129,16 +134,21 @@ class AzureOCRProcessor:
         logger.info(f"Extraction OCR du PDF: {pdf_path}")
 
         # Analyser directement le PDF avec Azure
+        logger.info("Envoi du PDF à Azure OCR...")
         with open(pdf_path, "rb") as f:
             poller = self.client.begin_analyze_document(
                 model_id=model_id,
                 document=f
             )
 
+        logger.info("En attente de la réponse Azure OCR (cela peut prendre du temps)...")
         result = poller.result()
+        logger.info("Réponse Azure reçue !")
 
-        # Extraire le texte complet
+        # Extraire le texte complet et nettoyer les caractères null
         full_text = result.content
+        if full_text:
+            full_text = full_text.replace('\u0000', '').replace('\x00', '')
 
         # Extraire les pages
         pages = []
