@@ -92,8 +92,8 @@ def extract_text_from_file(file_path: str, ocr_processor: Optional[AzureOCRProce
             raise Exception("PDF scanné mais Azure OCR non disponible")
 
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
-        if size_mb > 4:
-            raise Exception(f"PDF scanné trop grand pour OCR: {size_mb:.1f} MB (max 4 MB)")
+        if size_mb > 50:
+            raise Exception(f"PDF scanné trop grand pour OCR: {size_mb:.1f} MB (max 50 MB)")
 
         try:
             result = ocr_processor.process_file(file_path)
