@@ -19,6 +19,7 @@ from src.azure_ocr import AzureOCRProcessor
 from src.embeddings import EmbeddingGenerator
 from src.supabase_client_v2 import SupabaseUploaderV2
 from src.pdf_extractor import extract_text_from_pdf
+from src.chunking_config import chunking_manager, get_chunking_params
 
 # Charger les variables d'environnement
 load_dotenv()
@@ -35,15 +36,15 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION DE LA GRANULARITÉ
 # ============================================================================
 
-# Anciens paramètres : chunk_size=1000, overlap=200
-# Nouveaux paramètres pour FORTE GRANULARITÉ :
-CHUNK_SIZE = 400      # Chunks de 400 caractères (au lieu de 1000)
-CHUNK_OVERLAP = 100   # Overlap de 100 caractères (au lieu de 200)
+# Configuration automatique via chunking_config
+# Par défaut : FINE (chunk_size=400, overlap=100)
+# Peut être modifié via GRANULARITY_LEVEL dans .env
+# Options : ULTRA_FINE, FINE, MEDIUM, STANDARD, COARSE
 
-# Avec ces paramètres, un document de 10,000 caractères donnera :
-# - Avant : ~12 chunks
-# - Maintenant : ~30 chunks
-# = 2.5x plus d'embeddings !
+config = chunking_manager.get_config()
+logger.info(f"Configuration de chunking : {config}")
+logger.info(f"Niveau de granularité : {chunking_manager.get_granularity_level().value.upper()}")
+logger.info(f"Chunks attendus pour 10k caractères : ~{config.chunks_per_10k}")
 
 
 def extract_text_from_file(file_path: str, ocr_processor: Optional[AzureOCRProcessor] = None) -> tuple:
@@ -141,13 +142,10 @@ def process_single_file(
         if page_count:
             print(f"📄 Pages: {page_count}")
 
-        # 2. Découpage en chunks (FORTE GRANULARITÉ)
-        print(f"🔢 Découpage en chunks (taille: {CHUNK_SIZE}, overlap: {CHUNK_OVERLAP})...")
-        chunks = embedding_gen.chunk_text(
-            full_text,
-            chunk_size=CHUNK_SIZE,
-            overlap=CHUNK_OVERLAP
-        )
+        # 2. Découpage en chunks (utilise la configuration globale)
+        chunk_size, chunk_overlap = get_chunking_params()
+        print(f"🔢 Découpage en chunks (taille: {chunk_size}, overlap: {chunk_overlap})...")
+        chunks = embedding_gen.chunk_text(full_text)
 
         print(f"✅ {len(chunks)} chunks créés (granularité fine)")
 
@@ -183,8 +181,9 @@ def process_single_file(
                 processing_method=method,
                 additional_metadata={
                     "original_file_name": file_name,
-                    "chunk_size": CHUNK_SIZE,
-                    "chunk_overlap": CHUNK_OVERLAP
+                    "chunk_size": chunk_size,
+                    "chunk_overlap": chunk_overlap,
+                    "granularity_level": chunking_manager.get_granularity_level().value
                 }
             )
 
@@ -229,10 +228,14 @@ def process_files_parallel(
 
     total = len(file_paths)
 
+    chunk_size, chunk_overlap = get_chunking_params()
+    granularity = chunking_manager.get_granularity_level().value.upper()
+
     print(f"\n{'='*70}")
     print(f"🚀 TRAITEMENT DE {total} FICHIERS")
     print(f"   Workers: {workers}")
-    print(f"   Granularité: {CHUNK_SIZE} caractères/chunk (overlap {CHUNK_OVERLAP})")
+    print(f"   Niveau de granularité: {granularity}")
+    print(f"   Taille chunk: {chunk_size} caractères (overlap {chunk_overlap})")
     print(f"   Upload: {'OUI' if upload else 'NON'}")
     print(f"{'='*70}\n")
 
