@@ -34,7 +34,7 @@ class DocumentChatbot:
         self,
         model: str = "gpt-5",
         search_limit: int = 5,
-        search_threshold: float = 0.7
+        search_threshold: float = 0.3
     ):
         """
         Initialise le chatbot.
@@ -42,7 +42,7 @@ class DocumentChatbot:
         Args:
             model: Modèle OpenAI à utiliser (gpt-5, gpt-4, etc.)
             search_limit: Nombre de documents à récupérer pour le contexte
-            search_threshold: Seuil de similarité pour la recherche
+            search_threshold: Seuil de similarité pour la recherche (0.3 par défaut car chunks courts)
         """
         self.model = model
         self.search_limit = search_limit
@@ -316,8 +316,8 @@ def main():
     parser.add_argument(
         "-t", "--threshold",
         type=float,
-        default=0.7,
-        help="Seuil de similarité (défaut: 0.7)"
+        default=0.3,
+        help="Seuil de similarité (défaut: 0.3)"
     )
 
     parser.add_argument(
