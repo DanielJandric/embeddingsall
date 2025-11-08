@@ -34,8 +34,7 @@ class DocumentChatbot:
         self,
         model: str = "gpt-5",
         search_limit: int = 5,
-        search_threshold: float = 0.7,
-        reasoning_effort: str = "high"
+        search_threshold: float = 0.7
     ):
         """
         Initialise le chatbot.
@@ -44,12 +43,10 @@ class DocumentChatbot:
             model: Modèle OpenAI à utiliser (gpt-5, gpt-4, etc.)
             search_limit: Nombre de documents à récupérer pour le contexte
             search_threshold: Seuil de similarité pour la recherche
-            reasoning_effort: Niveau de raisonnement (low, medium, high)
         """
         self.model = model
         self.search_limit = search_limit
         self.search_threshold = search_threshold
-        self.reasoning_effort = reasoning_effort
 
         # Initialiser OpenAI
         api_key = os.getenv("OPENAI_API_KEY")
@@ -148,14 +145,14 @@ CONTEXTE DES DOCUMENTS:
         # Ajouter la question actuelle
         messages.append({"role": "user", "content": user_question})
 
-        logger.info(f"🤖 Génération de la réponse avec {self.model} (reasoning: {self.reasoning_effort})")
+        logger.info(f"🤖 Génération de la réponse avec {self.model}")
 
         try:
-            # Appeler OpenAI avec la nouvelle API Responses
+            # Appeler OpenAI avec l'API Responses
+            # Note: GPT-5 gère automatiquement le raisonnement, pas besoin de reasoning_effort
             response = self.client.responses.create(
                 model=self.model,
                 input=messages,
-                reasoning_effort=self.reasoning_effort,
                 store=True  # Conserver le contexte pour les conversations multi-tours
             )
 
@@ -315,14 +312,6 @@ def main():
     )
 
     parser.add_argument(
-        "-r", "--reasoning",
-        type=str,
-        default="high",
-        choices=["low", "medium", "high"],
-        help="Niveau de raisonnement GPT-5 (défaut: high)"
-    )
-
-    parser.add_argument(
         "--no-sources",
         action="store_true",
         help="Ne pas afficher les sources"
@@ -335,8 +324,7 @@ def main():
         chatbot = DocumentChatbot(
             model=args.model,
             search_limit=args.limit,
-            search_threshold=args.threshold,
-            reasoning_effort=args.reasoning
+            search_threshold=args.threshold
         )
 
         # Mode direct (une question)
