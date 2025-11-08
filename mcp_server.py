@@ -31,6 +31,9 @@ from mcp.types import (
 
 from src.semantic_search import SemanticSearchEngine
 from src.supabase_client import SupabaseUploader
+from src.embeddings import EmbeddingGenerator
+from src.supabase_client_v2 import SupabaseUploaderV2
+from src.azure_ocr import AzureOCRProcessor
 
 # Configuration du logging
 logging.basicConfig(
@@ -42,6 +45,24 @@ logger = logging.getLogger(__name__)
 # Initialiser le moteur de recherche
 search_engine = SemanticSearchEngine()
 supabase = SupabaseUploader()
+
+# Initialiser les composants pour l'upload
+try:
+    embedding_gen = EmbeddingGenerator()
+    uploader_v2 = SupabaseUploaderV2()
+    logger.info("✅ Générateur d'embeddings et uploader V2 initialisés")
+except Exception as e:
+    logger.warning(f"⚠️ Impossible d'initialiser l'uploader: {e}")
+    embedding_gen = None
+    uploader_v2 = None
+
+# Azure OCR (optionnel)
+try:
+    ocr_processor = AzureOCRProcessor()
+    logger.info("✅ Azure OCR initialisé")
+except Exception as e:
+    logger.warning(f"⚠️ Azure OCR non disponible: {e}")
+    ocr_processor = None
 
 # Créer le serveur MCP
 app = Server("documents-search-server")
@@ -158,6 +179,26 @@ async def list_tools() -> list[Tool]:
                 "properties": {},
                 "required": []
             }
+        ),
+        Tool(
+            name="upload_document",
+            description=(
+                "Upload un document vers la base de données. "
+                "Le document sera traité (extraction de texte, chunking, embeddings) "
+                "puis uploadé dans Supabase. "
+                "Supporte les formats: PDF, TXT, MD, CSV. "
+                "Pour les PDFs scannés, utilise Azure OCR automatiquement."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "file_path": {
+                        "type": "string",
+                        "description": "Chemin absolu du fichier à uploader"
+                    }
+                },
+                "required": ["file_path"]
+            }
         )
     ]
 
@@ -251,6 +292,70 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
                 type="text",
                 text="\n".join(output)
             )]
+
+        elif name == "upload_document":
+            file_path = arguments.get("file_path")
+
+            if not file_path:
+                return [TextContent(
+                    type="text",
+                    text="❌ Erreur: file_path est requis"
+                )]
+
+            # Vérifier que les composants sont initialisés
+            if embedding_gen is None or uploader_v2 is None:
+                return [TextContent(
+                    type="text",
+                    text="❌ Erreur: Les composants d'upload ne sont pas initialisés"
+                )]
+
+            logger.info(f"📤 Upload du document: {file_path}")
+
+            try:
+                # Importer la fonction de traitement
+                from process_v2 import process_single_file
+
+                # Traiter le fichier
+                result = process_single_file(
+                    file_path=file_path,
+                    embedding_gen=embedding_gen,
+                    uploader=uploader_v2,
+                    ocr_processor=ocr_processor,
+                    upload=True
+                )
+
+                # Formater la réponse
+                if result["status"] == "success":
+                    output = []
+                    output.append("✅ UPLOAD RÉUSSI")
+                    output.append("=" * 70)
+                    output.append(f"📄 Fichier: {result['file_name']}")
+                    output.append(f"📝 Texte extrait: {result['full_text_length']} caractères")
+                    output.append(f"🔢 Chunks créés: {result['chunks_count']}")
+                    output.append(f"🧠 Embeddings générés: {result['embeddings_count']}")
+                    output.append(f"⚙️ Méthode: {result['method']}")
+                    if result.get('page_count'):
+                        output.append(f"📄 Pages: {result['page_count']}")
+
+                    return [TextContent(
+                        type="text",
+                        text="\n".join(output)
+                    )]
+                else:
+                    return [TextContent(
+                        type="text",
+                        text=f"❌ Erreur lors de l'upload:\n{result.get('error', 'Erreur inconnue')}"
+                    )]
+
+            except Exception as e:
+                logger.error(f"Erreur upload: {e}")
+                import traceback
+                traceback.print_exc()
+
+                return [TextContent(
+                    type="text",
+                    text=f"❌ Erreur lors de l'upload:\n{str(e)}"
+                )]
 
         else:
             return [TextContent(
