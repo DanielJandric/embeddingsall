@@ -90,12 +90,13 @@ class SemanticSearchEngine:
             for i, result in enumerate(results, 1):
                 processed_results.append({
                     "rank": i,
-                    "content": result.get("content", ""),
+                    "content": result.get("chunk_content", ""),
                     "similarity": result.get("similarity", 0),
-                    "metadata": result.get("metadata", {}),
-                    "file_name": result.get("metadata", {}).get("file_name", "Inconnu"),
-                    "file_path": result.get("metadata", {}).get("file_path", ""),
-                    "chunk_index": result.get("metadata", {}).get("chunk_index", 0)
+                    "metadata": result.get("chunk_metadata", {}),
+                    "file_name": result.get("file_name", "Inconnu"),
+                    "file_path": result.get("file_path", ""),
+                    "chunk_index": result.get("chunk_index", 0),
+                    "document_metadata": result.get("document_metadata", {})
                 })
 
             return processed_results
