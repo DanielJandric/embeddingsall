@@ -220,7 +220,7 @@ class SupabaseUploader:
         try:
             # Utiliser la fonction RPC de Supabase pour la recherche vectorielle
             response = self.client.rpc(
-                "match_documents",
+                "match_document_chunks",
                 {
                     "query_embedding": query_embedding,
                     "match_threshold": threshold,
