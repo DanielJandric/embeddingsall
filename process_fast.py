@@ -53,14 +53,22 @@ def read_text_file(file_path, max_size_mb=10):
 def process_with_ocr(file_path, ocr_processor):
     """Traite avec OCR"""
     try:
+        if ocr_processor is None:
+            raise Exception("Azure OCR non disponible - vérifiez vos credentials")
+
         size_mb = os.path.getsize(file_path) / (1024 * 1024)
         if size_mb > 50:
-            return None
+            raise Exception(f"Fichier trop grand: {size_mb:.1f} MB (max 50 MB)")
 
         result = ocr_processor.process_file(file_path)
-        return result.get('full_text', '')
-    except Exception:
-        return None
+        text = result.get('full_text', '')
+
+        if not text or len(text.strip()) == 0:
+            raise Exception("OCR n'a extrait aucun texte du PDF")
+
+        return text
+    except Exception as e:
+        raise Exception(f"Erreur OCR: {str(e)}")
 
 
 def process_single_file(file_path, ocr_processor, embedding_generator, supabase_uploader, upload=True):
@@ -73,13 +81,18 @@ def process_single_file(file_path, ocr_processor, embedding_generator, supabase_
         # 1. Extraction
         if file_type == 'text':
             text = read_text_file(file_path)
+            if not text:
+                raise Exception("Impossible de lire le fichier texte")
         elif file_type in ['pdf', 'image']:
             text = process_with_ocr(file_path, ocr_processor)
         else:
+            # Essayer de lire comme texte pour les fichiers sans extension
             text = read_text_file(file_path)
+            if not text:
+                raise Exception(f"Type de fichier non supporté: {file_type}")
 
         if not text or len(text.strip()) == 0:
-            return {'success': False, 'file': file_path, 'error': 'Pas de texte'}
+            raise Exception("Aucun texte extrait")
 
         # 2. Embeddings
         chunks = embedding_generator.chunk_text(text, chunk_size=1000, overlap=200)
@@ -161,7 +174,11 @@ def main():
     try:
         from src.azure_ocr import AzureOCRProcessor
         ocr_processor = AzureOCRProcessor()
-    except:
+        print("✅ Azure OCR initialisé")
+    except Exception as e:
+        print(f"⚠️  Azure OCR non disponible: {str(e)}")
+        print("   → Les PDFs et images ne pourront pas être traités")
+        print("   → Seuls les fichiers texte (.txt, .md, etc.) seront traités")
         ocr_processor = None
 
     embedding_generator = EmbeddingGenerator()
