@@ -157,7 +157,7 @@ class EmbeddingGenerator:
 
         while start < len(text):
             # Calculer la fin du chunk
-            end = start + chunk_size
+            end = min(start + chunk_size, len(text))
 
             # Si ce n'est pas le dernier chunk, essayer de couper à un espace
             if end < len(text):
@@ -170,8 +170,15 @@ class EmbeddingGenerator:
             if chunk:
                 chunks.append(chunk)
 
-            # Avancer avec chevauchement
-            start = end - overlap if end < len(text) else end
+            # Avancer avec chevauchement - S'ASSURER qu'on progresse toujours
+            if end < len(text):
+                new_start = end - overlap
+                # Si on ne progresse pas, forcer la progression
+                if new_start <= start:
+                    new_start = start + max(1, chunk_size // 2)
+                start = new_start
+            else:
+                start = end  # Fin du texte
 
         logger.info(f"Texte découpé en {len(chunks)} chunks")
         return chunks
