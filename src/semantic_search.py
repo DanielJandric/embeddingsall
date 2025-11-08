@@ -48,7 +48,7 @@ class SemanticSearchEngine:
         self,
         query: str,
         limit: int = 5,
-        threshold: float = 0.7,
+        threshold: float = 0.3,
         table_name: str = "documents"
     ) -> List[Dict[str, Any]]:
         """
@@ -57,7 +57,7 @@ class SemanticSearchEngine:
         Args:
             query: Question ou requête de recherche
             limit: Nombre maximum de résultats
-            threshold: Seuil de similarité (0-1)
+            threshold: Seuil de similarité (0-1, défaut: 0.3 car chunks courts)
             table_name: Nom de la table à interroger
 
         Returns:
@@ -111,7 +111,7 @@ class SemanticSearchEngine:
         self,
         query: str,
         limit: int = 5,
-        threshold: float = 0.7
+        threshold: float = 0.3
     ) -> str:
         """
         Recherche et formate les résultats pour affichage.
@@ -157,7 +157,7 @@ class SemanticSearchEngine:
         self,
         query: str,
         limit: int = 5,
-        threshold: float = 0.7
+        threshold: float = 0.3
     ) -> str:
         """
         Récupère le contexte pour RAG (Retrieval Augmented Generation).
