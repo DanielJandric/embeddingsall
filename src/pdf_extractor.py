@@ -36,6 +36,10 @@ def extract_text_from_pdf(pdf_path: str) -> Optional[str]:
 
         full_text = "\n".join(text_parts)
 
+        # Nettoyer les caractères null et autres caractères problématiques
+        full_text = full_text.replace('\u0000', '')  # Supprimer les caractères null
+        full_text = full_text.replace('\x00', '')     # Supprimer les null bytes
+
         if full_text.strip():
             logger.info(f"✅ {len(full_text)} caractères extraits de {len(reader.pages)} pages")
             return full_text

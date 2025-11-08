@@ -81,8 +81,10 @@ class AzureOCRProcessor:
         result = poller.result()
         logger.info("Réponse Azure reçue !")
 
-        # Extraire le texte complet
+        # Extraire le texte complet et nettoyer les caractères null
         full_text = result.content
+        if full_text:
+            full_text = full_text.replace('\u0000', '').replace('\x00', '')
 
         # Extraire les pages et leurs contenus
         pages = []
@@ -143,8 +145,10 @@ class AzureOCRProcessor:
         result = poller.result()
         logger.info("Réponse Azure reçue !")
 
-        # Extraire le texte complet
+        # Extraire le texte complet et nettoyer les caractères null
         full_text = result.content
+        if full_text:
+            full_text = full_text.replace('\u0000', '').replace('\x00', '')
 
         # Extraire les pages
         pages = []
