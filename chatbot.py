@@ -32,7 +32,7 @@ class DocumentChatbot:
 
     def __init__(
         self,
-        model: str = "gpt-4o-mini",
+        model: str = "gpt-5",
         search_limit: int = 5,
         search_threshold: float = 0.7
     ):
@@ -40,7 +40,7 @@ class DocumentChatbot:
         Initialise le chatbot.
 
         Args:
-            model: Modèle OpenAI à utiliser (gpt-4o-mini, gpt-4, etc.)
+            model: Modèle OpenAI à utiliser (gpt-5, gpt-4, etc.)
             search_limit: Nombre de documents à récupérer pour le contexte
             search_threshold: Seuil de similarité pour la recherche
         """
@@ -148,19 +148,26 @@ CONTEXTE DES DOCUMENTS:
         logger.info(f"🤖 Génération de la réponse avec {self.model}")
 
         try:
-            # Appeler OpenAI
-            response = self.client.chat.completions.create(
+            # Appeler OpenAI avec l'API Responses
+            # Note: GPT-5 gère automatiquement le raisonnement, pas besoin de reasoning_effort
+            response = self.client.responses.create(
                 model=self.model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=1000
+                input=messages,
+                store=True  # Conserver le contexte pour les conversations multi-tours
             )
 
-            answer = response.choices[0].message.content
+            # Utiliser le helper output_text pour extraire la réponse
+            answer = response.output_text
 
             # Ajouter à l'historique
             self.conversation_history.append({"role": "user", "content": user_question})
             self.conversation_history.append({"role": "assistant", "content": answer})
+
+            # Logger le résumé du raisonnement si disponible
+            if hasattr(response, 'output') and response.output:
+                for item in response.output:
+                    if item.get('type') == 'reasoning' and item.get('summary'):
+                        logger.debug(f"💭 Raisonnement: {item['summary']}")
 
             return answer
 
@@ -286,8 +293,8 @@ def main():
     parser.add_argument(
         "-m", "--model",
         type=str,
-        default="gpt-4o-mini",
-        help="Modèle OpenAI à utiliser (défaut: gpt-4o-mini)"
+        default="gpt-5",
+        help="Modèle OpenAI à utiliser (défaut: gpt-5)"
     )
 
     parser.add_argument(
