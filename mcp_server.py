@@ -74,14 +74,18 @@ async def list_resources() -> list[Resource]:
     Liste les ressources disponibles (statistiques de la base de données).
     """
     try:
-        stats = supabase.get_table_stats("documents")
+        # Utiliser uploader_v2 pour accéder à documents_full (nouvelle architecture)
+        if uploader_v2:
+            stats = uploader_v2.get_database_stats()
+        else:
+            stats = {"total_documents": 0, "total_chunks": 0}
 
         return [
             Resource(
                 uri="supabase://documents/stats",
                 name="Database Statistics",
                 mimeType="application/json",
-                description=f"Statistics about the documents database. Total: {stats.get('total_documents', 0)} documents"
+                description=f"Statistics about the documents database. Total: {stats.get('total_documents', 0)} documents, {stats.get('total_chunks', 0)} chunks"
             )
         ]
     except Exception as e:
@@ -96,7 +100,11 @@ async def read_resource(uri: str) -> str:
     """
     if uri == "supabase://documents/stats":
         try:
-            stats = supabase.get_table_stats("documents")
+            # Utiliser uploader_v2 pour accéder à documents_full (nouvelle architecture)
+            if uploader_v2:
+                stats = uploader_v2.get_database_stats()
+            else:
+                stats = {"total_documents": 0, "total_chunks": 0, "error": "Uploader V2 non initialisé"}
             return json.dumps(stats, indent=2)
         except Exception as e:
             logger.error(f"Erreur lecture ressource: {e}")
@@ -358,12 +366,22 @@ async def call_tool(name: str, arguments: Any) -> Sequence[TextContent]:
         elif name == "get_database_stats":
             logger.info("📊 Récupération des statistiques")
 
-            stats = supabase.get_table_stats("documents")
+            # Utiliser uploader_v2 pour accéder à documents_full (nouvelle architecture)
+            if uploader_v2:
+                stats = uploader_v2.get_database_stats()
+            else:
+                return [TextContent(
+                    type="text",
+                    text="❌ Erreur: Uploader V2 non initialisé. Impossible de récupérer les statistiques."
+                )]
 
             output = []
             output.append("📊 STATISTIQUES DE LA BASE DE DONNÉES")
             output.append("=" * 70)
             output.append(f"📁 Total documents: {stats.get('total_documents', 0)}")
+            output.append(f"📦 Total chunks: {stats.get('total_chunks', 0)}")
+            output.append(f"📊 Moyenne chunks/doc: {stats.get('avg_chunks_per_document', 0):.1f}")
+            output.append(f"📏 Taille moyenne chunk: {stats.get('avg_chunk_size', 0):.0f} caractères")
             output.append(f"🕐 Date: {stats.get('timestamp', 'N/A')}")
 
             return [TextContent(
