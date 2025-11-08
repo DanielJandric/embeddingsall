@@ -1,0 +1,225 @@
+openapi: 3.0.0
+info:
+  title: Documents Search API
+  description: API pour la recherche sémantique dans les documents avec ChatGPT
+  version: 1.0.0
+servers:
+  - url: http://localhost:8000
+    description: Serveur local (développement)
+  - url: https://votre-domaine.com
+    description: Serveur production (à configurer avec ngrok ou un domaine)
+
+paths:
+  /api/stats:
+    get:
+      operationId: getDatabaseStats
+      summary: Récupère les statistiques de la base de données
+      description: Retourne le nombre de documents, chunks, et statistiques de la base
+      responses:
+        '200':
+          description: Statistiques récupérées avec succès
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+
+  /api/search:
+    post:
+      operationId: searchDocuments
+      summary: Recherche sémantique dans les documents
+      description: Effectue une recherche sémantique basée sur les embeddings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                query:
+                  type: string
+                  description: Question ou requête de recherche
+                  example: "Combien vaut l'immeuble de Aigle ?"
+                limit:
+                  type: integer
+                  description: Nombre maximum de résultats
+                  default: 5
+                  minimum: 1
+                  maximum: 20
+                threshold:
+                  type: number
+                  description: Seuil de similarité entre 0 et 1
+                  default: 0.3
+                  minimum: 0.0
+                  maximum: 1.0
+              required:
+                - query
+      responses:
+        '200':
+          description: Recherche effectuée avec succès
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  query:
+                    type: string
+                  count:
+                    type: integer
+                  results:
+                    type: array
+                    items:
+                      type: object
+
+  /api/upload:
+    post:
+      operationId: uploadDocument
+      summary: Upload un document dans la base
+      description: Traite et indexe un document (OCR, chunking, embeddings)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                file_path:
+                  type: string
+                  description: Chemin absolu du fichier à uploader
+                  example: "C:\\Documents\\rapport.pdf"
+              required:
+                - file_path
+      responses:
+        '200':
+          description: Document uploadé avec succès
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  file_name:
+                    type: string
+                  chunks_count:
+                    type: integer
+
+  /api/files/read:
+    post:
+      operationId: readFile
+      summary: Lit le contenu d'un fichier
+      description: Lit le contenu d'un fichier texte local
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                file_path:
+                  type: string
+                  description: Chemin absolu du fichier à lire
+                max_chars:
+                  type: integer
+                  description: Nombre max de caractères à retourner
+                  default: 10000
+              required:
+                - file_path
+      responses:
+        '200':
+          description: Fichier lu avec succès
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  content:
+                    type: string
+
+  /api/files/write:
+    post:
+      operationId: writeFile
+      summary: Crée ou modifie un fichier
+      description: Écrit du contenu dans un fichier local
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                file_path:
+                  type: string
+                  description: Chemin absolu du fichier à créer
+                content:
+                  type: string
+                  description: Contenu à écrire
+                encoding:
+                  type: string
+                  description: Encodage du fichier
+                  default: "utf-8"
+              required:
+                - file_path
+                - content
+      responses:
+        '200':
+          description: Fichier écrit avec succès
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  file_path:
+                    type: string
+
+  /api/files/list:
+    post:
+      operationId: listFiles
+      summary: Liste les fichiers d'un dossier
+      description: Explore un dossier et liste les fichiers selon un pattern
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                directory:
+                  type: string
+                  description: Chemin du dossier à lister
+                pattern:
+                  type: string
+                  description: Pattern de filtre (ex '*.pdf')
+                  default: "*"
+                recursive:
+                  type: boolean
+                  description: Recherche récursive dans les sous-dossiers
+                  default: false
+              required:
+                - directory
+      responses:
+        '200':
+          description: Fichiers listés avec succès
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  count:
+                    type: integer
+                  files:
+                    type: array
+                    items:
+                      type: object
