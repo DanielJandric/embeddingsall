@@ -302,16 +302,24 @@ class SupabaseUploaderV2:
             response = self.client.rpc("get_database_stats").execute()
 
             if response.data:
-                stats = response.data[0]
+                # La fonction retourne JSON, donc response.data est directement le dict
+                stats = response.data if isinstance(response.data, dict) else response.data[0]
+
                 return {
-                    "total_documents": stats.get("total_documents", 0),
-                    "total_chunks": stats.get("total_chunks", 0),
+                    "total_documents": int(stats.get("total_documents", 0)),
+                    "total_chunks": int(stats.get("total_chunks", 0)),
                     "avg_chunks_per_document": float(stats.get("avg_chunks_per_document", 0)),
                     "total_size_mb": float(stats.get("total_size_mb", 0)),
-                    "avg_chunk_size": stats.get("avg_chunk_size", 0)
+                    "avg_chunk_size": int(stats.get("avg_chunk_size", 0))
                 }
 
-            return {}
+            return {
+                "total_documents": 0,
+                "total_chunks": 0,
+                "avg_chunks_per_document": 0.0,
+                "total_size_mb": 0.0,
+                "avg_chunk_size": 0
+            }
 
         except Exception as e:
             logger.error(f"❌ Erreur stats: {e}")
@@ -334,7 +342,8 @@ class SupabaseUploaderV2:
             ).execute()
 
             if response.data:
-                return response.data[0]
+                # Retourne JSON directement
+                return response.data if isinstance(response.data, dict) else response.data[0]
 
             return None
 
@@ -359,7 +368,8 @@ class SupabaseUploaderV2:
             ).execute()
 
             if response.data:
-                result = response.data[0]
+                # Retourne JSON directement
+                result = response.data if isinstance(response.data, dict) else response.data[0]
                 logger.info(
                     f"🗑️  Document supprimé: {result.get('deleted_chunks_count', 0)} chunks"
                 )
