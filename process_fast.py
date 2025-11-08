@@ -82,8 +82,8 @@ def process_pdf(file_path, ocr_processor):
         raise Exception("PDF scanné détecté mais Azure OCR non disponible")
 
     size_mb = os.path.getsize(file_path) / (1024 * 1024)
-    if size_mb > 4:  # Limite Azure à 4MB pour éviter les erreurs
-        raise Exception(f"PDF trop grand pour OCR: {size_mb:.1f} MB (max 4 MB)")
+    if size_mb > 50:  # Limite Azure à 50MB avec plan payant
+        raise Exception(f"PDF trop grand pour OCR: {size_mb:.1f} MB (max 50 MB)")
 
     try:
         print(f"⏳ {file_name}: Envoi à Azure OCR ({size_mb:.1f} MB)...")
