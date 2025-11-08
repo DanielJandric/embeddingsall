@@ -65,12 +65,17 @@ def process_pdf(file_path, ocr_processor):
     1. D'abord essaie d'extraire le texte directement (rapide, gratuit)
     2. Si pas de texte, utilise Azure OCR (lent, pour scans)
     """
+    file_name = Path(file_path).name
+
     # Étape 1: Extraction directe du texte
     text = extract_pdf_text(file_path)
     if text and len(text.strip()) > 100:  # Au moins 100 caractères
+        print(f"✅ {file_name}: Texte extrait directement")
         return text
 
     # Étape 2: Fallback vers Azure OCR pour les PDFs scannés
+    print(f"🔍 {file_name}: PDF scanné, tentative Azure OCR...")
+
     if ocr_processor is None:
         raise Exception("PDF scanné détecté mais Azure OCR non disponible")
 
@@ -79,12 +84,14 @@ def process_pdf(file_path, ocr_processor):
         raise Exception(f"PDF trop grand pour OCR: {size_mb:.1f} MB (max 4 MB)")
 
     try:
+        print(f"⏳ {file_name}: Envoi à Azure OCR ({size_mb:.1f} MB)...")
         result = ocr_processor.process_file(file_path)
         text = result.get('full_text', '')
 
         if not text or len(text.strip()) == 0:
             raise Exception("OCR n'a extrait aucun texte du PDF")
 
+        print(f"✅ {file_name}: OCR terminé, {len(text)} caractères")
         return text
     except Exception as e:
         raise Exception(f"Erreur OCR: {str(e)}")
