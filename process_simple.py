@@ -48,6 +48,8 @@ def process_one_file(file_path, embedding_generator, supabase_uploader, upload=T
             print("📖 Lecture du fichier texte...")
             with open(file_path, 'r', encoding='utf-8') as f:
                 text = f.read()
+            # Nettoyer les caractères null
+            text = text.replace('\u0000', '').replace('\x00', '')
 
         elif file_type == 'pdf':
             print("📖 Extraction du texte du PDF...")
