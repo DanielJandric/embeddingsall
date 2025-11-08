@@ -163,12 +163,6 @@ CONTEXTE DES DOCUMENTS:
             self.conversation_history.append({"role": "user", "content": user_question})
             self.conversation_history.append({"role": "assistant", "content": answer})
 
-            # Logger le résumé du raisonnement si disponible
-            if hasattr(response, 'output') and response.output:
-                for item in response.output:
-                    if item.get('type') == 'reasoning' and item.get('summary'):
-                        logger.debug(f"💭 Raisonnement: {item['summary']}")
-
             return answer
 
         except Exception as e:
