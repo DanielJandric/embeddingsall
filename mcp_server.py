@@ -13,6 +13,11 @@ import json
 from typing import Any, Sequence
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Charger les variables d'environnement depuis .env
+load_dotenv()
+
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp.types import (
