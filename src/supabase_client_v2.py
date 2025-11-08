@@ -301,9 +301,9 @@ class SupabaseUploaderV2:
         try:
             response = self.client.rpc("get_database_stats").execute()
 
-            if response.data:
-                # La fonction retourne JSON, donc response.data est directement le dict
-                stats = response.data if isinstance(response.data, dict) else response.data[0]
+            if response.data and len(response.data) > 0:
+                # La fonction retourne TABLE, donc response.data est une liste de dicts
+                stats = response.data[0]
 
                 return {
                     "total_documents": int(stats.get("total_documents", 0)),
@@ -341,9 +341,9 @@ class SupabaseUploaderV2:
                 {"document_id_param": document_id}
             ).execute()
 
-            if response.data:
-                # Retourne JSON directement
-                return response.data if isinstance(response.data, dict) else response.data[0]
+            if response.data and len(response.data) > 0:
+                # La fonction retourne TABLE, donc response.data[0]
+                return response.data[0]
 
             return None
 
@@ -367,9 +367,9 @@ class SupabaseUploaderV2:
                 {"file_path_param": file_path}
             ).execute()
 
-            if response.data:
-                # Retourne JSON directement
-                result = response.data if isinstance(response.data, dict) else response.data[0]
+            if response.data and len(response.data) > 0:
+                # La fonction retourne TABLE, donc response.data[0]
+                result = response.data[0]
                 logger.info(
                     f"🗑️  Document supprimé: {result.get('deleted_chunks_count', 0)} chunks"
                 )
