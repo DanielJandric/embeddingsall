@@ -74,7 +74,14 @@ def process_one_file(file_path, embedding_generator, supabase_uploader, upload=T
             chunks = chunks[:100]
 
         print(f"🔢 Génération de {len(chunks)} embeddings...")
-        embeddings = embedding_generator.generate_embeddings_batch(chunks, batch_size=20)
+        print(f"   ⏳ Batch 1/{(len(chunks)-1)//20 + 1}...", flush=True)
+        embeddings = []
+        for i in range(0, len(chunks), 20):
+            batch = chunks[i:i+20]
+            print(f"   ⏳ Traitement batch {i//20 + 1}/{(len(chunks)-1)//20 + 1} ({len(batch)} chunks)...", flush=True)
+            batch_embeddings = embedding_generator.generate_embeddings_batch(batch, batch_size=20)
+            embeddings.extend(batch_embeddings)
+            print(f"   ✅ Batch {i//20 + 1} terminé", flush=True)
         print(f"✅ {len(embeddings)} embeddings générés")
 
         # 3. Upload vers Supabase
