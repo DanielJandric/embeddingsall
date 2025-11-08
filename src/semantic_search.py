@@ -10,6 +10,12 @@ from pathlib import Path
 from src.embeddings import EmbeddingGenerator
 from src.supabase_client import SupabaseUploader
 
+try:
+    from src.supabase_client_v2 import SupabaseUploaderV2
+    HAS_V2 = True
+except:
+    HAS_V2 = False
+
 logger = logging.getLogger(__name__)
 
 
