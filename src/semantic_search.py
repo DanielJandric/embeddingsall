@@ -91,11 +91,13 @@ class SemanticSearchEngine:
                 processed_results.append({
                     "rank": i,
                     "content": result.get("chunk_content", ""),
+                    "full_document_content": result.get("full_document_content", ""),
                     "similarity": result.get("similarity", 0),
                     "metadata": result.get("chunk_metadata", {}),
                     "file_name": result.get("file_name", "Inconnu"),
                     "file_path": result.get("file_path", ""),
                     "chunk_index": result.get("chunk_index", 0),
+                    "document_id": result.get("document_id", 0),
                     "document_metadata": result.get("document_metadata", {})
                 })
 

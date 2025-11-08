@@ -84,16 +84,31 @@ class DocumentChatbot:
         if not results:
             return [], "Aucun document pertinent trouvé dans la base de données."
 
-        # Construire le contexte
+        # Construire le contexte en utilisant le document complet si disponible
         context_parts = []
+        seen_documents = set()  # Pour éviter de dupliquer les documents complets
+
         for result in results:
             file_name = result['file_name']
-            content = result['content']
             similarity = result['similarity']
+            document_id = result.get('document_id', 0)
 
-            context_parts.append(
-                f"[Source: {file_name} - Pertinence: {similarity:.1%}]\n{content}"
-            )
+            # Si on a le document complet et qu'on ne l'a pas déjà ajouté
+            full_content = result.get('full_document_content', '')
+            if full_content and document_id and document_id not in seen_documents:
+                # Utiliser le document complet (limité à 10000 caractères pour GPT-5)
+                content_preview = full_content[:10000] + "..." if len(full_content) > 10000 else full_content
+                context_parts.append(
+                    f"[Source: {file_name} - Pertinence: {similarity:.1%} - DOCUMENT COMPLET]\n{content_preview}"
+                )
+                seen_documents.add(document_id)
+                logger.info(f"📄 Document complet ajouté: {file_name} ({len(full_content)} caractères)")
+            else:
+                # Fallback sur le chunk si pas de document complet
+                content = result['content']
+                context_parts.append(
+                    f"[Source: {file_name} - Chunk {result.get('chunk_index', 0)} - Pertinence: {similarity:.1%}]\n{content}"
+                )
 
         context = "\n\n---\n\n".join(context_parts)
 
