@@ -9,6 +9,7 @@ import time
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 from openai import OpenAI
+from .chunking_config import chunking_manager, get_chunking_params
 
 logger = logging.getLogger(__name__)
 
@@ -135,8 +136,8 @@ class EmbeddingGenerator:
     def chunk_text(
         self,
         text: str,
-        chunk_size: int = 1000,
-        overlap: int = 200
+        chunk_size: Optional[int] = None,
+        overlap: Optional[int] = None
     ) -> List[str]:
         """
         Découpe un texte long en chunks avec chevauchement.
@@ -144,11 +145,18 @@ class EmbeddingGenerator:
         Args:
             text: Texte à découper
             chunk_size: Taille approximative de chaque chunk en caractères
+                       (utilise la configuration globale si None)
             overlap: Nombre de caractères de chevauchement entre chunks
+                    (utilise la configuration globale si None)
 
         Returns:
             Liste de chunks de texte
         """
+        # Utiliser la configuration globale si non spécifié
+        if chunk_size is None or overlap is None:
+            default_chunk_size, default_overlap = get_chunking_params()
+            chunk_size = chunk_size or default_chunk_size
+            overlap = overlap or default_overlap
         if not text or len(text) <= chunk_size:
             return [text] if text else []
 
@@ -186,20 +194,25 @@ class EmbeddingGenerator:
     def process_ocr_result(
         self,
         ocr_result: Dict[str, any],
-        chunk_size: int = 1000,
-        overlap: int = 200
+        chunk_size: Optional[int] = None,
+        overlap: Optional[int] = None
     ) -> List[Dict[str, any]]:
         """
         Traite un résultat OCR pour générer des embeddings par chunks.
 
         Args:
             ocr_result: Résultat OCR du module azure_ocr
-            chunk_size: Taille des chunks de texte
-            overlap: Chevauchement entre chunks
+            chunk_size: Taille des chunks de texte (utilise la configuration globale si None)
+            overlap: Chevauchement entre chunks (utilise la configuration globale si None)
 
         Returns:
             Liste de dicts avec texte et embeddings
         """
+        # Utiliser la configuration globale si non spécifié
+        if chunk_size is None or overlap is None:
+            default_chunk_size, default_overlap = get_chunking_params()
+            chunk_size = chunk_size or default_chunk_size
+            overlap = overlap or default_overlap
         full_text = ocr_result.get("full_text", "")
 
         if not full_text:
