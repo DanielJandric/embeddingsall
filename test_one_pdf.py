@@ -56,8 +56,8 @@ try:
         ocr = AzureOCRProcessor()
 
         size_mb = os.path.getsize(pdf_path) / (1024 * 1024)
-        if size_mb > 4:
-            print(f"❌ PDF trop grand pour Azure OCR: {size_mb:.1f} MB (max 4 MB)")
+        if size_mb > 50:
+            print(f"❌ PDF trop grand pour Azure OCR: {size_mb:.1f} MB (max 50 MB)")
             print("   → Impossible de traiter ce PDF")
             sys.exit(1)
 
