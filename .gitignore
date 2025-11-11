@@ -31,6 +31,7 @@ data/input/*
 !data/input/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+supabase_exports/
 
 # IDE
 .vscode/
