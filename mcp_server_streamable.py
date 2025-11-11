@@ -208,41 +208,30 @@ def list_files(directory: str, pattern: str = "*", recursive: bool = False) -> s
     return "\n".join(out)
 
 # -----------------------------------------------------------------------------
-# ASGI App (monte le transport Streamable HTTP → expose /mcp)
+# ASGI App (FastMCP streamable HTTP → expose /mcp)
 # -----------------------------------------------------------------------------
-# Le transport Streamable HTTP fournit l’endpoint MCP sous /mcp.
-asgi_mcp = mcp.streamable_http_app()
+app = mcp.streamable_http_app()
 
-# Starlette "base" pour ajouter /health, puis montage de l'app MCP, puis CORS.
-base = Starlette()
-# Éviter les redirections /mcp -> /mcp/ (provoque 307 et échec des POST)
+# Ajouter /health et / directement sur l'app MCP (sans sous-app/mount -> garde lifespan)
 try:
-    base.router.redirect_slashes = False
+    @app.route("/health")
+    async def health(_: Request):
+        return JSONResponse({"ok": True})
+
+    @app.route("/", methods=["GET", "HEAD"])
+    async def root_ok(_: Request):
+        return JSONResponse({"ok": True, "endpoint": "/mcp"})
 except Exception:
+    # Si l'objet retourné ne supporte pas .route, on ignore (le /mcp reste fonctionnel)
     pass
 
-@base.route("/health")
-async def health(request):
-    return JSONResponse({"ok": True})
-
-# Root path for Render health checks (HEAD/GET /)
-@base.route("/", methods=["GET", "HEAD"])
-async def root_ok(request: Request):
-    return JSONResponse({"ok": True, "endpoint": "/mcp"})
-
-# Note: do not define explicit /mcp routes here; let the mounted FastMCP app handle all methods
-
-# Monte l'app MCP à la racine; elle expose elle-même /mcp
-base.mount("/", app=asgi_mcp)
-
-# Applique CORS en dernier (expose Mcp-Session-Id)
+# CORS large pour clients MCP (ChatGPT/Claude)
 app = CORSMiddleware(
-    base,
+    app,
     allow_origins=["*"],
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"],
+    allow_methods=["GET", "POST", "OPTIONS", "HEAD"],
     allow_headers=["*"],
     expose_headers=["Mcp-Session-Id"],
-    allow_credentials=False,
 )
 
 # -----------------------------------------------------------------------------
