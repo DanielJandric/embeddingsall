@@ -37,7 +37,12 @@ log = logging.getLogger("mcp_streamable")
 # Initialisations applicatives
 # -----------------------------------------------------------------------------
 log.info("✅ Moteur de recherche sémantique initialisé")
-search = SemanticSearchEngine()
+try:
+    search = SemanticSearchEngine()
+except Exception as e:
+    # OpenAI key or Supabase config may be missing; keep server alive
+    log.warning(f"⚠️ Search engine disabled: {e}")
+    search = None
 supabase = SupabaseUploader()
 
 try:
@@ -65,6 +70,8 @@ mcp = FastMCP("documents-search-server", stateless_http=True)  # simple pour Cha
 @mcp.tool()
 def search_documents(query: str, limit: int = 5, threshold: float = 0.3) -> str:
     """Recherche sémantique dans la base de documents (embeddings)."""
+    if not search:
+        return "❌ Recherche indisponible: configurez OPENAI_API_KEY et SUPABASE_URL/SUPABASE_KEY."
     results = search.search(query=query, limit=limit, threshold=threshold)
     if not results:
         return "Aucun résultat."
@@ -85,6 +92,8 @@ def search_documents(query: str, limit: int = 5, threshold: float = 0.3) -> str:
 @mcp.tool()
 def get_context_for_rag(query: str, limit: int = 5, threshold: float = 0.3) -> str:
     """Retourne un contexte formaté pour RAG."""
+    if not search:
+        return "❌ RAG indisponible: configurez OPENAI_API_KEY et SUPABASE_URL/SUPABASE_KEY."
     return search.get_context_for_rag(query=query, limit=limit, threshold=threshold)
 
 @mcp.tool()
@@ -211,6 +220,11 @@ base = Starlette()
 @base.route("/health")
 async def health(request):
     return JSONResponse({"ok": True})
+
+# Root path for Render health checks (HEAD/GET /)
+@base.route("/", methods=["GET", "HEAD"])
+async def root_ok(request: Request):
+    return JSONResponse({"ok": True, "endpoint": "/mcp"})
 
 # OPTIONS explicite pour /mcp et /mcp/** (préflight CORS sans erreur 500)
 @base.route("/mcp", methods=["OPTIONS"])
