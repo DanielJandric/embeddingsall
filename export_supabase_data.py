@@ -7,11 +7,16 @@ Tables exportées:
 - documents_full : Documents complets
 - document_chunks : Chunks avec embeddings
 
+Formats supportés:
+- JSON (par défaut) : Données structurées avec métadonnées
+- CSV : Format tabulaire (colonnes JSONB converties en string JSON)
+
 Les données sont sauvegardées dans le dossier 'supabase_exports/'
 """
 
 import os
 import json
+import csv
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -61,15 +66,17 @@ class SupabaseExporter:
         self,
         table_name: str,
         batch_size: int = 1000,
-        select_fields: str = "*"
+        select_fields: str = "*",
+        format: str = "json"
     ) -> Dict[str, Any]:
         """
-        Exporte une table complète en JSON.
+        Exporte une table complète en JSON ou CSV.
 
         Args:
             table_name: Nom de la table
             batch_size: Taille des batches pour la pagination
             select_fields: Champs à sélectionner
+            format: Format d'export ("json" ou "csv")
 
         Returns:
             Dict avec les métadonnées de l'export
@@ -112,17 +119,20 @@ class SupabaseExporter:
 
         # Sauvegarder les données
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_file = self.output_dir / f"{table_name}_{timestamp}.json"
 
-        export_data = {
-            "table": table_name,
-            "export_date": datetime.now().isoformat(),
-            "total_records": len(all_data),
-            "data": all_data
-        }
-
-        with open(output_file, 'w', encoding='utf-8') as f:
-            json.dump(export_data, f, indent=2, ensure_ascii=False, default=str)
+        if format.lower() == "csv":
+            output_file = self.output_dir / f"{table_name}_{timestamp}.csv"
+            self._save_to_csv(all_data, output_file, table_name)
+        else:
+            output_file = self.output_dir / f"{table_name}_{timestamp}.json"
+            export_data = {
+                "table": table_name,
+                "export_date": datetime.now().isoformat(),
+                "total_records": len(all_data),
+                "data": all_data
+            }
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False, default=str)
 
         logger.info(
             f"✅ Export terminé: {len(all_data)} entrées → {output_file.name}"
@@ -131,25 +141,67 @@ class SupabaseExporter:
         return {
             "table": table_name,
             "records": len(all_data),
-            "file": str(output_file.absolute())
+            "file": str(output_file.absolute()),
+            "format": format
         }
 
-    def export_all(self) -> Dict[str, Any]:
+    def _save_to_csv(self, data: List[Dict], output_file: Path, table_name: str):
+        """
+        Sauvegarde les données en CSV.
+
+        Args:
+            data: Données à sauvegarder
+            output_file: Chemin du fichier de sortie
+            table_name: Nom de la table
+        """
+        if not data:
+            logger.warning(f"⚠️  Aucune donnée à exporter pour {table_name}")
+            return
+
+        # Obtenir toutes les clés possibles
+        fieldnames = set()
+        for row in data:
+            fieldnames.update(row.keys())
+
+        fieldnames = sorted(list(fieldnames))
+
+        with open(output_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+
+            for row in data:
+                # Convertir les types complexes en JSON string
+                csv_row = {}
+                for key, value in row.items():
+                    if isinstance(value, (dict, list)):
+                        # JSONB ou array → string JSON
+                        csv_row[key] = json.dumps(value, ensure_ascii=False, default=str)
+                    elif value is None:
+                        csv_row[key] = ''
+                    else:
+                        csv_row[key] = str(value)
+
+                writer.writerow(csv_row)
+
+    def export_all(self, format: str = "json") -> Dict[str, Any]:
         """
         Exporte toutes les tables.
+
+        Args:
+            format: Format d'export ("json" ou "csv")
 
         Returns:
             Dict avec les statistiques d'export
         """
-        logger.info("🚀 Début de l'export complet de Supabase...")
+        logger.info(f"🚀 Début de l'export complet de Supabase (format: {format})...")
 
         results = {}
 
         # Exporter documents_full
-        results['documents_full'] = self.export_table('documents_full')
+        results['documents_full'] = self.export_table('documents_full', format=format)
 
         # Exporter document_chunks
-        results['document_chunks'] = self.export_table('document_chunks')
+        results['document_chunks'] = self.export_table('document_chunks', format=format)
 
         # Récupérer les statistiques
         try:
@@ -261,9 +313,15 @@ def main():
         help='Dossier de sortie (défaut: supabase_exports)'
     )
     parser.add_argument(
+        '-f', '--format',
+        choices=['json', 'csv'],
+        default='json',
+        help='Format d\'export: json ou csv (défaut: json)'
+    )
+    parser.add_argument(
         '--hierarchical',
         action='store_true',
-        help='Export hiérarchique (documents avec leurs chunks)'
+        help='Export hiérarchique (documents avec leurs chunks) - JSON uniquement'
     )
     parser.add_argument(
         '--all',
@@ -278,12 +336,12 @@ def main():
 
         if args.all:
             # Export complet
-            logger.info("📦 Mode: Export complet")
-            results = exporter.export_all()
+            logger.info(f"📦 Mode: Export complet (format: {args.format})")
+            results = exporter.export_all(format=args.format)
             hierarchical_result = exporter.export_documents_with_chunks()
 
             logger.info("\n" + "="*60)
-            logger.info("✅ EXPORT COMPLET TERMINÉ")
+            logger.info(f"✅ EXPORT COMPLET TERMINÉ ({args.format.upper()})")
             logger.info("="*60)
             logger.info(f"Documents: {results['documents_full']['records']}")
             logger.info(f"Chunks: {results['document_chunks']['records']}")
@@ -291,12 +349,14 @@ def main():
             logger.info("="*60)
 
         elif args.hierarchical:
-            # Export hiérarchique uniquement
+            # Export hiérarchique uniquement (JSON seulement)
+            if args.format == 'csv':
+                logger.warning("⚠️  Mode hiérarchique uniquement disponible en JSON")
             logger.info("📦 Mode: Export hiérarchique")
             result = exporter.export_documents_with_chunks()
 
             logger.info("\n" + "="*60)
-            logger.info("✅ EXPORT HIÉRARCHIQUE TERMINÉ")
+            logger.info("✅ EXPORT HIÉRARCHIQUE TERMINÉ (JSON)")
             logger.info("="*60)
             logger.info(f"Documents: {result['documents']}")
             logger.info(f"Fichier: {result['file']}")
@@ -304,11 +364,11 @@ def main():
 
         else:
             # Export par défaut (tables séparées)
-            logger.info("📦 Mode: Export par tables")
-            results = exporter.export_all()
+            logger.info(f"📦 Mode: Export par tables (format: {args.format})")
+            results = exporter.export_all(format=args.format)
 
             logger.info("\n" + "="*60)
-            logger.info("✅ EXPORT PAR TABLES TERMINÉ")
+            logger.info(f"✅ EXPORT PAR TABLES TERMINÉ ({args.format.upper()})")
             logger.info("="*60)
             logger.info(f"Documents: {results['documents_full']['records']}")
             logger.info(f"Chunks: {results['document_chunks']['records']}")
