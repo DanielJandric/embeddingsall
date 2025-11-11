@@ -232,8 +232,8 @@ async def root_ok(request: Request):
 
 # Note: do not define explicit /mcp routes here; let the mounted FastMCP app handle all methods
 
-# Monte l'app MCP sous /mcp (l'app interne gère méthodes et sous-routes)
-base.mount("/mcp", app=asgi_mcp)
+# Monte l'app MCP à la racine; elle expose elle-même /mcp
+base.mount("/", app=asgi_mcp)
 
 # Applique CORS en dernier (expose Mcp-Session-Id)
 app = CORSMiddleware(
