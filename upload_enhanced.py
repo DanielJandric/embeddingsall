@@ -28,6 +28,8 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime
 import logging
+import concurrent.futures
+import hashlib
 
 # Import des modules existants
 from src.file_processor import extract_text_from_file
@@ -111,6 +113,7 @@ class EnhancedDocumentUploader:
         surfaces = metadata.get('surfaces_m2', [])
         surface_m2 = max(surfaces) if surfaces else None
         nombre_pieces = metadata.get('nombre_pieces')
+        annee_construction = metadata.get('annee_construction')
 
         # Génération de tags automatiques
         tags = self._generate_tags(metadata, type_doc, categorie)
@@ -123,6 +126,14 @@ class EnhancedDocumentUploader:
             confidence_level = 'moyenne'
         else:
             confidence_level = 'basse'
+
+        # Checksum de fichier pour déduplication robuste
+        checksum = None
+        try:
+            with open(file_path, 'rb') as fbin:
+                checksum = hashlib.sha256(fbin.read()).hexdigest()
+        except Exception:
+            pass
 
         # Construction du document pour insertion
         document_data = {
@@ -171,6 +182,7 @@ class EnhancedDocumentUploader:
             'type_bien': type_bien,
             'surface_m2': surface_m2,
             'nombre_pieces': nombre_pieces,
+            'annee_construction': annee_construction,
 
             # Qualité et confiance
             'metadata_completeness_score': metadata.get('metadata_completeness_score', 0),
@@ -186,7 +198,10 @@ class EnhancedDocumentUploader:
 
             # Informations de traitement
             'processing_method': 'upload_enhanced',
-            'extraction_version': '2.0'
+            'extraction_version': '2.0',
+
+            # Dédoublonnage
+            'checksum': checksum
         }
 
         return document_data
@@ -541,7 +556,8 @@ class EnhancedDocumentUploader:
         self,
         directory: str,
         metadata_csv: Optional[str] = None,
-        metadata_json: Optional[str] = None
+        metadata_json: Optional[str] = None,
+        workers: int = 1
     ):
         """
         Upload tous les documents d'un répertoire
@@ -571,10 +587,24 @@ class EnhancedDocumentUploader:
 
         logger.info(f"Trouvé {len(files)} fichiers à traiter")
 
-        # Upload de chaque fichier
-        for file_path in files:
-            manual_meta = manual_metadata_map.get(Path(file_path).name, {})
-            self.upload_document(file_path, manual_meta)
+        # Upload (optionnellement en parallèle)
+        workers = max(1, int(workers or 1))
+        if workers == 1:
+            for file_path in files:
+                manual_meta = manual_metadata_map.get(Path(file_path).name, {})
+                self.upload_document(file_path, manual_meta)
+        else:
+            logger.info(f"Parallélisation activée: {workers} workers")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+                futures: List[concurrent.futures.Future] = []
+                for file_path in files:
+                    manual_meta = manual_metadata_map.get(Path(file_path).name, {})
+                    futures.append(executor.submit(self.upload_document, file_path, manual_meta))
+                for f in concurrent.futures.as_completed(futures):
+                    try:
+                        _ = f.result()
+                    except Exception as e:
+                        logger.error(f"Worker error: {e}", exc_info=True)
 
         # Affichage des statistiques
         self._print_stats()

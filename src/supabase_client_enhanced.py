@@ -64,32 +64,45 @@ class SupabaseClientEnhanced:
 
         try:
             file_path = document_data.get('file_path')
+            checksum = document_data.get('checksum')
 
-            # Vérifier si le document existe déjà
-            existing = self.client.table("documents_full")\
-                .select("id")\
-                .eq("file_path", file_path)\
-                .execute()
+            # 1) Chercher par checksum si disponible (plus fiable)
+            doc_id = None
+            if checksum:
+                by_checksum = self.client.table("documents_full")\
+                    .select("id")\
+                    .eq("checksum", checksum)\
+                    .execute()
+                if by_checksum.data:
+                    doc_id = by_checksum.data[0]['id']
 
-            if existing.data:
+            # 2) Sinon, fallback par file_path
+            if doc_id is None and file_path:
+                by_path = self.client.table("documents_full")\
+                    .select("id")\
+                    .eq("file_path", file_path)\
+                    .execute()
+                if by_path.data:
+                    doc_id = by_path.data[0]['id']
+
+            if doc_id is not None:
                 # Mettre à jour
-                doc_id = existing.data[0]['id']
-                response = self.client.table("documents_full")\
+                self.client.table("documents_full")\
                     .update(document_data)\
                     .eq("id", doc_id)\
                     .execute()
                 logger.info(f"📝 Document mis à jour: {document_data['file_name']} (ID: {doc_id})")
                 return doc_id
-            else:
-                # Créer nouveau
-                response = self.client.table("documents_full")\
-                    .insert(document_data)\
-                    .execute()
 
-                if response.data:
-                    doc_id = response.data[0]['id']
-                    logger.info(f"✅ Document créé: {document_data['file_name']} (ID: {doc_id})")
-                    return doc_id
+            # Créer nouveau
+            response = self.client.table("documents_full")\
+                .insert(document_data)\
+                .execute()
+
+            if response.data:
+                doc_id = response.data[0]['id']
+                logger.info(f"✅ Document créé: {document_data['file_name']} (ID: {doc_id})")
+                return doc_id
 
         except Exception as e:
             logger.error(f"❌ Erreur upload document {document_data.get('file_name')}: {e}")
