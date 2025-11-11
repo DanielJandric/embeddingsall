@@ -247,8 +247,8 @@ async def mcp_options(request: Request):
 async def mcp_head(_: Request):
     return Response(status_code=200)
 
-# Monte l'app MCP (qui expose /mcp) à la racine
-base.mount("/", app=asgi_mcp)
+# Monte l'app MCP explicitement sous /mcp (évite les conflits de lifespan)
+base.mount("/mcp", app=asgi_mcp)
 
 # Applique CORS en dernier (expose Mcp-Session-Id)
 app = CORSMiddleware(
