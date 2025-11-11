@@ -244,8 +244,9 @@ app = CORSMiddleware(
 # main
 # -----------------------------------------------------------------------------
 async def main():
-    log.info("🚀 MCP (Streamable HTTP) sur /mcp")
-    config = uvicorn.Config(app=app, host="0.0.0.0", port=3000, log_level="info")
+    port = int(os.getenv("PORT", "3000"))
+    log.info(f"🚀 MCP (Streamable HTTP) sur /mcp - Port {port}")
+    config = uvicorn.Config(app=app, host="0.0.0.0", port=port, log_level="info")
     server = uvicorn.Server(config)
     await server.serve()
 
