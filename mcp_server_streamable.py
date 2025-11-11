@@ -247,6 +247,11 @@ async def mcp_options(request: Request):
 async def mcp_head(_: Request):
     return Response(status_code=200)
 
+@base.route("/mcp", methods=["GET"])
+async def mcp_get(_: Request):
+    # Friendly probe response for connectors that test GET on /mcp
+    return JSONResponse({"ok": True, "transport": "streamable_http", "endpoint": "/mcp"})
+
 # Monte l'app MCP explicitement sous /mcp (évite les conflits de lifespan)
 base.mount("/mcp", app=asgi_mcp)
 
