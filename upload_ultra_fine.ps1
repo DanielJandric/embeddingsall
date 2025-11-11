@@ -7,18 +7,11 @@ $ErrorActionPreference = "Stop"
 # Configuration pour extraction ultra-fine
 Write-Host "🔧 Configuration ULTRA-FINE avec chunks longs et contexte enrichi..." -ForegroundColor Cyan
 
-# Variables d'environnement - AZURE OCR pour extraction maximale
-$env:AZURE_FORM_RECOGNIZER_ENDPOINT = "https://mcpdj.cognitiveservices.azure.com/"
-$env:AZURE_FORM_RECOGNIZER_KEY = "AZURE_KEY_REDACTED"
-
-# OpenAI pour embeddings
-$env:OPENAI_API_KEY = "OPENAI_KEY_REDACTED"
-$env:EMBEDDING_MODEL = "text-embedding-3-small"
-
-# Supabase
-$env:SUPABASE_URL = "https://kpfitkmaaztrjwqvockf.supabase.co"
-$env:SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwZml0a21hYXp0cmp3cXZvY2tmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjI1OTA5MjgsImV4cCI6MjA3ODE2NjkyOH0.bX83QyPdlTBz0wc4qqyjKsY7jAFNkGFdG-Affo8AhEQ"
-$env:SUPABASE_SERVICEROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwZml0a21hYXp0cmp3cXZvY2tmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjU5MDkyOCwiZXhwIjoyMDc4MTY2OTI4fQ.NYrNsMHTy-GVgyUAsiC0l1-mU-mdQUXZLs2CW-O5yAQ"
+# Exige que les variables sensibles soient déjà configurées dans l'environnement
+if (-not $env:OPENAI_API_KEY) { Write-Host "❌ OPENAI_API_KEY manquant"; exit 1 }
+if (-not $env:SUPABASE_URL) { Write-Host "❌ SUPABASE_URL manquant"; exit 1 }
+# Utilise SUPABASE_SERVICEROLE_KEY si présent, sinon SUPABASE_KEY
+if (-not $env:SUPABASE_SERVICEROLE_KEY -and -not $env:SUPABASE_KEY) { Write-Host "❌ SUPABASE key manquante (SUPABASE_SERVICEROLE_KEY ou SUPABASE_KEY)"; exit 1 }
 
 # CONFIGURATION ULTRA-FINE: Chunks longs avec beaucoup de contexte
 $env:CHUNK_SIZE = "2500"        # Chunks plus longs pour plus de contexte

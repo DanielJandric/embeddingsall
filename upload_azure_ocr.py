@@ -9,19 +9,25 @@ import hashlib
 from datetime import datetime
 import time
 
-# Force les variables d'environnement
-os.environ["AZURE_FORM_RECOGNIZER_ENDPOINT"] = "https://mcpdj.cognitiveservices.azure.com/"
-os.environ["AZURE_FORM_RECOGNIZER_KEY"] = "AZURE_KEY_REDACTED"
-os.environ["OPENAI_API_KEY"] = "OPENAI_KEY_REDACTED"
-os.environ["SUPABASE_URL"] = "https://kpfitkmaaztrjwqvockf.supabase.co"
-os.environ["SUPABASE_KEY"] = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwZml0a21hYXp0cmp3cXZvY2tmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjU5MDkyOCwiZXhwIjoyMDc4MTY2OTI4fQ.NYrNsMHTy-GVgyUAsiC0l1-mU-mdQUXZLs2CW-O5yAQ"
+# Exige les variables d'environnement (ne rien mettre en dur dans le code)
+required_env = [
+    "OPENAI_API_KEY",
+    "SUPABASE_URL",
+]
+missing = [k for k in required_env if not os.getenv(k)]
+if missing:
+    print(f"❌ Missing environment variables: {', '.join(missing)}")
+    print("Set them in PowerShell before running, e.g.:")
+    print('$env:OPENAI_API_KEY="sk-..."')
+    print('$env:SUPABASE_URL="https://....supabase.co"')
+    sys.exit(1)
 
 # Chunks longs avec beaucoup de contexte
 CHUNK_SIZE = 2500
 CHUNK_OVERLAP = 500
 
 print("📦 Installing packages...")
-os.system("pip install -q supabase openai azure-ai-formrecognizer azure-core")
+os.system("pip install -q supabase openai azure-ai-formrecognizer azure-core openpyxl pandas")
 
 from supabase import create_client
 from openai import OpenAI
@@ -132,6 +138,60 @@ def extract_text_simple(file_path):
                 return '\n'.join([p.text for p in doc.paragraphs])
             except:
                 pass
+        elif file_path.suffix.lower() in ['.xlsx', '.xls']:
+            # Extraction Excel
+            try:
+                import pandas as pd
+                import openpyxl
+                
+                # Lire toutes les feuilles
+                excel_file = pd.ExcelFile(file_path)
+                full_text = f"=== EXCEL FILE: {file_path.name} ===\n\n"
+                
+                for sheet_name in excel_file.sheet_names:
+                    df = pd.read_excel(file_path, sheet_name=sheet_name)
+                    full_text += f"\n--- SHEET: {sheet_name} ---\n"
+                    full_text += f"Dimensions: {df.shape[0]} rows x {df.shape[1]} columns\n\n"
+                    
+                    # Convertir en texte structuré
+                    # En-têtes
+                    full_text += "COLUMNS: " + " | ".join(str(col) for col in df.columns) + "\n\n"
+                    
+                    # Données (limiter aux 1000 premières lignes pour éviter trop de volume)
+                    for idx, row in df.head(1000).iterrows():
+                        row_text = f"Row {idx+1}: "
+                        row_values = []
+                        for col in df.columns:
+                            val = row[col]
+                            if pd.notna(val):
+                                row_values.append(f"{col}={val}")
+                        row_text += " | ".join(row_values)
+                        full_text += row_text + "\n"
+                    
+                    # Résumé statistique pour colonnes numériques
+                    numeric_cols = df.select_dtypes(include=['number']).columns
+                    if len(numeric_cols) > 0:
+                        full_text += "\n--- STATISTICS ---\n"
+                        for col in numeric_cols:
+                            if df[col].notna().any():
+                                full_text += f"{col}: min={df[col].min():.2f}, max={df[col].max():.2f}, mean={df[col].mean():.2f}\n"
+                
+                return full_text
+            except Exception as e:
+                print(f"  ⚠️ Excel extraction error: {e}")
+                return None
+        elif file_path.suffix.lower() == '.csv':
+            # CSV simple
+            try:
+                import pandas as pd
+                df = pd.read_csv(file_path, encoding='utf-8', on_bad_lines='skip')
+                text = f"=== CSV FILE: {file_path.name} ===\n"
+                text += f"Shape: {df.shape[0]} rows x {df.shape[1]} columns\n\n"
+                text += df.to_string(max_rows=1000)
+                return text
+            except:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    return f.read()
     except:
         pass
     return None
@@ -165,15 +225,19 @@ def process_file(file_path):
         print(f"  ⏭️ Already uploaded")
         return
     
-    # TOUJOURS utiliser Azure OCR pour PDF et images
+    # Stratégie d'extraction selon le type
     text = None
     if file_path.suffix.lower() in ['.pdf', '.png', '.jpg', '.jpeg', '.tiff', '.bmp']:
+        # Azure OCR pour PDFs et images
         text = extract_text_azure(file_path)
+    elif file_path.suffix.lower() in ['.xlsx', '.xls', '.csv']:
+        # Extraction directe pour Excel/CSV
+        text = extract_text_simple(file_path)
     else:
-        # Essayer Azure d'abord même pour les autres formats
-        text = extract_text_azure(file_path)
+        # Autres formats : essayer simple d'abord, puis Azure
+        text = extract_text_simple(file_path)
         if not text:
-            text = extract_text_simple(file_path)
+            text = extract_text_azure(file_path)
     
     if not text or len(text.strip()) < 10:
         print(f"  ⚠️ No text extracted - skipping")
@@ -232,6 +296,7 @@ def process_file(file_path):
             'document_id': doc_id,
             'chunk_index': idx,
             'chunk_content': chunk,
+            'chunk_size': len(chunk),  # Colonne directe pour Supabase
             'embedding': embedding,
             'chunk_metadata': {
                 'total_chunks': len(chunks),
@@ -281,7 +346,8 @@ input_dir = Path(r"C:\OneDriveExport")
 
 # Tous les formats supportés
 extensions = ['.pdf', '.txt', '.doc', '.docx', '.md', 
-              '.png', '.jpg', '.jpeg', '.tiff', '.bmp']
+              '.png', '.jpg', '.jpeg', '.tiff', '.bmp',
+              '.xlsx', '.xls', '.csv']  # Excel et CSV ajoutés
 
 files = []
 for ext in extensions:

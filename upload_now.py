@@ -8,12 +8,16 @@ from pathlib import Path
 import hashlib
 from datetime import datetime
 
-# Force les variables d'environnement
-os.environ["AZURE_FORM_RECOGNIZER_ENDPOINT"] = "https://mcpdj.cognitiveservices.azure.com/"
-os.environ["AZURE_FORM_RECOGNIZER_KEY"] = "AZURE_KEY_REDACTED"
-os.environ["OPENAI_API_KEY"] = "OPENAI_KEY_REDACTED"
-os.environ["SUPABASE_URL"] = "https://kpfitkmaaztrjwqvockf.supabase.co"
-os.environ["SUPABASE_KEY"] = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwZml0a21hYXp0cmp3cXZvY2tmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjU5MDkyOCwiZXhwIjoyMDc4MTY2OTI4fQ.NYrNsMHTy-GVgyUAsiC0l1-mU-mdQUXZLs2CW-O5yAQ"
+# Valider la présence des variables d'environnement requises
+required_env = ["OPENAI_API_KEY", "SUPABASE_URL", "SUPABASE_KEY"]
+missing = [k for k in required_env if not os.getenv(k)]
+if missing:
+    print(f"❌ Missing environment variables: {', '.join(missing)}")
+    print("Set them in PowerShell before running, e.g.:")
+    print('$env:OPENAI_API_KEY="sk-..."')
+    print('$env:SUPABASE_URL="https://....supabase.co"')
+    print('$env:SUPABASE_KEY="..."  # or SUPABASE_SERVICEROLE_KEY')
+    sys.exit(1)
 
 # Chunks longs avec beaucoup de contexte
 CHUNK_SIZE = 2500
@@ -123,8 +127,9 @@ def process_file(file_path):
             'document_id': doc_id,
             'chunk_index': idx,
             'chunk_content': chunk,
+            'chunk_size': len(chunk),  # Colonne directe requise par Supabase
             'embedding': embedding,
-            'chunk_metadata': {'total': len(chunks)}
+            'chunk_metadata': {'total': len(chunks), 'size': len(chunk)}
         }
         
         if idx > 0:
