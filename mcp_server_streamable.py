@@ -226,31 +226,7 @@ async def health(request):
 async def root_ok(request: Request):
     return JSONResponse({"ok": True, "endpoint": "/mcp"})
 
-# OPTIONS explicite + HEAD pour /mcp et /mcp/** (préflight CORS et ping)
-@base.route("/mcp", methods=["OPTIONS"])
-@base.route("/mcp/{rest:path}", methods=["OPTIONS"])
-async def mcp_options(request: Request):
-    allow_methods = request.headers.get("Access-Control-Request-Method", "GET,POST,OPTIONS")
-    allow_headers = request.headers.get("Access-Control-Request-Headers", "*")
-    return Response(
-        status_code=204,
-        headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": allow_methods,
-            "Access-Control-Allow-Headers": allow_headers,
-            "Access-Control-Max-Age": "600",
-        },
-    )
-
-@base.route("/mcp", methods=["HEAD"])
-@base.route("/mcp/{rest:path}", methods=["HEAD"])
-async def mcp_head(_: Request):
-    return Response(status_code=200)
-
-@base.route("/mcp", methods=["GET"])
-async def mcp_get(_: Request):
-    # Friendly probe response for connectors that test GET on /mcp
-    return JSONResponse({"ok": True, "transport": "streamable_http", "endpoint": "/mcp"})
+# Note: do not define explicit /mcp routes here; let the mounted FastMCP app handle all methods
 
 # Monte l'app MCP explicitement sous /mcp (évite les conflits de lifespan)
 base.mount("/mcp", app=asgi_mcp)
