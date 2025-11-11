@@ -226,7 +226,7 @@ async def health(request):
 async def root_ok(request: Request):
     return JSONResponse({"ok": True, "endpoint": "/mcp"})
 
-# OPTIONS explicite pour /mcp et /mcp/** (préflight CORS sans erreur 500)
+# OPTIONS explicite + HEAD pour /mcp et /mcp/** (préflight CORS et ping)
 @base.route("/mcp", methods=["OPTIONS"])
 @base.route("/mcp/{rest:path}", methods=["OPTIONS"])
 async def mcp_options(request: Request):
@@ -242,6 +242,11 @@ async def mcp_options(request: Request):
         },
     )
 
+@base.route("/mcp", methods=["HEAD"])
+@base.route("/mcp/{rest:path}", methods=["HEAD"])
+async def mcp_head(_: Request):
+    return Response(status_code=200)
+
 # Monte l'app MCP (qui expose /mcp) à la racine
 base.mount("/", app=asgi_mcp)
 
@@ -249,9 +254,10 @@ base.mount("/", app=asgi_mcp)
 app = CORSMiddleware(
     base,
     allow_origins=["*"],
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD"],
     allow_headers=["*"],
     expose_headers=["Mcp-Session-Id"],
+    allow_credentials=False,
 )
 
 # -----------------------------------------------------------------------------

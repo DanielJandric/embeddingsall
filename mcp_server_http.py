@@ -35,6 +35,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from starlette.applications import Starlette
 from starlette.routing import Route, Mount
+from starlette.responses import PlainTextResponse
 import uvicorn
 
 # -----------------------------------------------------------------------------
@@ -446,6 +447,24 @@ async def handle_sse(request):
             mcp_server.create_initialization_options(),
         )
     return Response(status_code=200)
+
+# OPTIONS/HEAD for /sse for stricter clients (Claude Desktop, some proxies)
+@http_app.api_route("/sse", methods=["OPTIONS"])
+async def sse_options(_: Request):
+    return Response(
+        status_code=204,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Headers": "*",
+            "Access-Control-Allow-Methods": "GET,POST,HEAD,OPTIONS",
+            "Access-Control-Max-Age": "600",
+        },
+    )
+
+@http_app.api_route("/sse", methods=["HEAD"])
+async def sse_head(_: Request):
+    # Indique que l'endpoint est vivant; le flux SSE utilise GET
+    return Response(status_code=200, headers={"Content-Type": "text/event-stream"})
 
 # ASGI composite: /sse (SSE) + / (FastAPI)
 starlette_app = Starlette(
