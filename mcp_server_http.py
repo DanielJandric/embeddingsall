@@ -460,11 +460,12 @@ starlette_app = Starlette(
 # -----------------------------------------------------------------------------
 async def main():
     logger.info("🚀 Démarrage du serveur MCP HTTP/SSE de recherche documentaire")
-    logger.info("🌐 Transport: SSE (/sse) + HTTP utilitaires (/mcp, /health)")
+    port = int(os.getenv("PORT", "3000"))
+    logger.info(f"🌐 Transport: SSE (/sse) + HTTP utilitaires (/mcp, /health) sur le port {port}")
     config = uvicorn.Config(
         app=starlette_app,
         host="0.0.0.0",
-        port=3000,
+        port=port,
         log_level="info",
     )
     server = uvicorn.Server(config)
