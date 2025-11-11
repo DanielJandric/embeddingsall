@@ -10,6 +10,7 @@ from psycopg_pool import ConnectionPool
 
 from ...config.settings import settings
 from ...data_pipeline.vector_store.pgvector_manager import build_hnsw_sql
+from ...config.settings import settings
 
 _pool: Optional[ConnectionPool] = None
 
@@ -120,6 +121,11 @@ def insert_chunks(document_id: int, chunks: List[str], embeddings: List[List[flo
 def semantic_search(query_embedding: List[float], top_k: int = 10) -> List[dict]:
     with get_conn() as conn:
         cur = conn.cursor(row_factory=dict_row)
+        # Improve recall by raising ef_search for this session
+        try:
+            cur.execute("SET LOCAL hnsw.ef_search = %s;", (max(16, settings.hnsw_ef_search),))
+        except Exception:
+            pass
         cur.execute(
             """
             SELECT c.id, c.document_id, c.chunk_index, c.content, (1 - (c.embedding <=> %s::vector)) AS similarity
@@ -129,6 +135,35 @@ def semantic_search(query_embedding: List[float], top_k: int = 10) -> List[dict]
             LIMIT %s;
             """,
             (query_embedding, query_embedding, top_k),
+        )
+        return list(cur.fetchall())
+
+def hybrid_search(query_text: str, query_embedding: List[float], top_k: int = 10,
+                  semantic_weight: float | None = None, fulltext_weight: float | None = None) -> List[dict]:
+    sw = semantic_weight if semantic_weight is not None else settings.semantic_weight
+    fw = fulltext_weight if fulltext_weight is not None else settings.fulltext_weight
+    with get_conn() as conn:
+        cur = conn.cursor(row_factory=dict_row)
+        try:
+            cur.execute("SET LOCAL hnsw.ef_search = %s;", (max(16, settings.hnsw_ef_search),))
+        except Exception:
+            pass
+        cur.execute(
+            """
+            WITH scored AS (
+                SELECT
+                    c.id, c.document_id, c.chunk_index, c.content,
+                    (1 - (c.embedding <=> %s::vector)) AS sem_score,
+                    ts_rank(c.search_vector, websearch_to_tsquery('simple', %s)) AS ft_score
+                FROM property_chunks c
+                WHERE c.embedding IS NOT NULL
+            )
+            SELECT *, (sem_score * %s + ft_score * %s) AS combined_score
+            FROM scored
+            ORDER BY combined_score DESC
+            LIMIT %s;
+            """,
+            (query_embedding, query_text, sw, fw, top_k),
         )
         return list(cur.fetchall())
 

@@ -2,9 +2,10 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from typing import List
 
-from ...analytics_engine.core.db import init_schema, insert_document, insert_chunks, semantic_search
+from ...analytics_engine.core.db import init_schema, insert_document, insert_chunks, semantic_search, hybrid_search
 from ...ai_engine.llm.embedding_client import embed_texts
 from ...ai_engine.rag.chunking_v2 import split_text
+from ...config.settings import settings
 
 router = APIRouter()
 
@@ -39,13 +40,50 @@ async def upload_text(body: UploadTextRequest):
 class SearchRequest(BaseModel):
     query: str
     top_k: int = 8
+    mode: str = "hybrid"  # "semantic" or "hybrid"
+    semantic_weight: float | None = None
+    fulltext_weight: float | None = None
 
 @router.post("/search")
 async def search(body: SearchRequest):
     if not body.query.strip():
         raise HTTPException(status_code=400, detail="Empty query")
     qv = embed_texts([body.query])[0]
-    rows = semantic_search(qv, top_k=body.top_k)
+    if body.mode == "semantic":
+        rows = semantic_search(qv, top_k=body.top_k)
+    else:
+        rows = hybrid_search(
+            query_text=body.query,
+            query_embedding=qv,
+            top_k=body.top_k,
+            semantic_weight=body.semantic_weight if body.semantic_weight is not None else settings.semantic_weight,
+            fulltext_weight=body.fulltext_weight if body.fulltext_weight is not None else settings.fulltext_weight,
+        )
     return {"results": rows}
+
+@router.post("/reindex-all")
+async def reindex_all(limit: int = 0):
+    """
+    Re-chunk & re-embed all documents in property_documents.
+    If limit>0, process only first N docs.
+    """
+    from ...analytics_engine.core.db import get_conn
+    cnt = 0
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT id, file_name, full_text FROM property_documents ORDER BY id ASC;")
+        rows = cur.fetchall()
+        if limit > 0:
+            rows = rows[:limit]
+        for (doc_id, file_name, full_text) in rows:
+            # Delete existing chunks
+            cur.execute("DELETE FROM property_chunks WHERE document_id = %s;", (doc_id,))
+            # Recreate
+            chunks = split_text(full_text or "")
+            vectors = embed_texts(chunks) if chunks else []
+            if chunks:
+                insert_chunks(doc_id, chunks, vectors)
+                cnt += 1
+    return {"reindexed_documents": cnt}
 
 

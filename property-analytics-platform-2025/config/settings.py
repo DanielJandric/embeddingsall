@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     # Performance
     chunk_size: int = 1500
     chunk_overlap: int = 300
+    semantic_weight: float = 0.6
+    fulltext_weight: float = 0.4
+    hnsw_ef_search: int = 100
 
     class Config:
         env_file = ".env"
