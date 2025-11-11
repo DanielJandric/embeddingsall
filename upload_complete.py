@@ -23,12 +23,12 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Configuration depuis les variables d'environnement
-AZURE_ENDPOINT = os.getenv("AZURE_FORM_RECOGNIZER_ENDPOINT", "https://mcpdj.cognitiveservices.azure.com/")
-AZURE_KEY = os.getenv("AZURE_FORM_RECOGNIZER_KEY", "AZURE_KEY_REDACTED")
-OPENAI_KEY = os.getenv("OPENAI_API_KEY", "OPENAI_KEY_REDACTED")
+AZURE_ENDPOINT = os.getenv("AZURE_FORM_RECOGNIZER_ENDPOINT")
+AZURE_KEY = os.getenv("AZURE_FORM_RECOGNIZER_KEY")
+OPENAI_KEY = os.getenv("OPENAI_API_KEY")
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-SUPABASE_URL = os.getenv("SUPABASE_URL", "https://kpfitkmaaztrjwqvockf.supabase.co")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICEROLE_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImtwZml0a21hYXp0cmp3cXZvY2tmIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc2MjU5MDkyOCwiZXhwIjoyMDc4MTY2OTI4fQ.NYrNsMHTy-GVgyUAsiC0l1-mU-mdQUXZLs2CW-O5yAQ")
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICEROLE_KEY") or os.getenv("SUPABASE_KEY")
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1500"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "300"))
 
