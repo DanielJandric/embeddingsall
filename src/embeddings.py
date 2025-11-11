@@ -13,6 +13,45 @@ from .chunking_config import chunking_manager, get_chunking_params
 
 logger = logging.getLogger(__name__)
 
+def chunk_text(text: str, chunk_size: Optional[int] = None, overlap: Optional[int] = None) -> List[str]:
+    """
+    Version fonctionnelle de chunk_text pour éviter d'exiger une clé OpenAI.
+    Découpe un texte long en chunks avec chevauchement en utilisant la config globale.
+    """
+    # Utiliser la configuration globale si non spécifié
+    if chunk_size is None or overlap is None:
+        default_chunk_size, default_overlap = get_chunking_params()
+        chunk_size = chunk_size or default_chunk_size
+        overlap = overlap or default_overlap
+    if not text or len(text) <= chunk_size:
+        return [text] if text else []
+
+    chunks: List[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + chunk_size, len(text))
+        if end < len(text):
+            last_space = text.rfind(' ', start, end)
+            if last_space > start:
+                end = last_space
+        piece = text[start:end].strip()
+        if piece:
+            chunks.append(piece)
+        if end < len(text):
+            new_start = end - overlap
+            if new_start <= start:
+                new_start = start + max(1, chunk_size // 2)
+            start = new_start
+        else:
+            start = end
+    return chunks
+
+def generate_embedding(text: str) -> List[float]:
+    """
+    Version fonctionnelle qui instancie un EmbeddingGenerator sous-jacent.
+    """
+    generator = EmbeddingGenerator()
+    return generator.generate_embedding(text)
 
 class EmbeddingGenerator:
     """

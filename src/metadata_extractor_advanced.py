@@ -1,3 +1,58 @@
+from pathlib import Path
+from typing import Dict, Any, List
+
+class MetadataExtractorAdvanced:
+    """
+    Extracteur minimal de métadonnées pour déblocage de pipeline.
+    Remplit les clés attendues par upload_enhanced.py avec des valeurs par défaut.
+    """
+    def extract_metadata(self, content: str, file_path: str) -> Dict[str, Any]:
+        words = content.split() if content else []
+        # Valeurs minimales/défaut
+        meta: Dict[str, Any] = {
+            # Dimensions / stats
+            "file_size_bytes": Path(file_path).stat().st_size if file_path else 0,
+            "longueur_mots": len(words),
+            "longueur_caracteres": len(content) if content else 0,
+
+            # Classification
+            "type_document_detecte": "inconnu",
+            "categorie_principale": "autre",
+            "categories_secondaires": [],
+
+            # Localisation
+            "commune_principale": None,
+            "canton_principal": None,
+            "codes_postaux": [],
+            "adresses_mentionnees": [],
+
+            # Montants / dates
+            "montants_chf": [],
+            "dates_mentionnees": [],
+            "annees_mentionnees": [],
+
+            # Parties
+            "bailleur": None,
+            "locataire": None,
+            "entreprises_mentionnees": [],
+
+            # Immo
+            "type_bien_detecte": None,
+            "surfaces_m2": [],
+            "nombre_pieces": None,
+            "annee_construction": None,
+
+            # Qualité
+            "metadata_completeness_score": 50,
+            "information_richness_score": 50,
+            "type_document_confiance": 0.5,
+
+            # Langue / style
+            "langue_detectee": "fr",
+            "niveau_formalite": None,
+        }
+        return meta
+
 """
 Extracteur de métadonnées ultra-complet.
 
