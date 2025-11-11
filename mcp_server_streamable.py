@@ -213,9 +213,13 @@ def list_files(directory: str, pattern: str = "*", recursive: bool = False) -> s
 # Le transport Streamable HTTP fournit l’endpoint MCP sous /mcp.
 asgi_mcp = mcp.streamable_http_app()
 
-# Starlette "base" pour ajouter /health et un OPTIONS explicite,
-# puis montage de l'app MCP, puis CORS.
+# Starlette "base" pour ajouter /health, puis montage de l'app MCP, puis CORS.
 base = Starlette()
+# Éviter les redirections /mcp -> /mcp/ (provoque 307 et échec des POST)
+try:
+    base.router.redirect_slashes = False
+except Exception:
+    pass
 
 @base.route("/health")
 async def health(request):
@@ -228,8 +232,8 @@ async def root_ok(request: Request):
 
 # Note: do not define explicit /mcp routes here; let the mounted FastMCP app handle all methods
 
-# Monte l'app MCP à la racine: l'app expose elle-même /mcp
-base.mount("/", app=asgi_mcp)
+# Monte l'app MCP sous /mcp (l'app interne gère méthodes et sous-routes)
+base.mount("/mcp", app=asgi_mcp)
 
 # Applique CORS en dernier (expose Mcp-Session-Id)
 app = CORSMiddleware(
