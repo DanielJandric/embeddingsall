@@ -1824,6 +1824,7 @@ async def main(
         logger.info("Sauvegarde de %s enrichissements (durée batch: %.2fs)", len(enrichments), batch_duration)
         for enrichment in enrichments:
             saver.save_enrichment(enrichment)
+        saver.flush()
         
         processed = len(all_enrichments)
         elapsed = (datetime.now() - global_start).total_seconds()
