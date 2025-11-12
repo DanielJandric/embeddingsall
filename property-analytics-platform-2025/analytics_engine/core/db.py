@@ -19,6 +19,10 @@ def get_pool() -> ConnectionPool:
     if _pool is not None:
         return _pool
     dsn = settings.database_url
+    # Disable server-side prepared statements (PgBouncer transaction pooling incompatibility)
+    # See psycopg docs: use prepare_threshold=0 when behind PgBouncer.
+    if dsn and "prepare_threshold=" not in dsn and dsn.startswith("postgres"):
+        dsn = dsn + ("&" if "?" in dsn else "?") + "prepare_threshold=0"
     if not dsn:
         # Try to assemble from Supabase variables if provided
         supa_url = settings.supabase_url
@@ -27,7 +31,7 @@ def get_pool() -> ConnectionPool:
             # Fallback DSN not trivial to derive; require DATABASE_URL for production
             raise ValueError("DATABASE_URL not set. Please provide DATABASE_URL for PostgreSQL.")
         raise ValueError("DATABASE_URL is required")
-    _pool = ConnectionPool(dsn, min_size=1, max_size=10, kwargs={"autocommit": True})
+    _pool = ConnectionPool(dsn, min_size=1, max_size=10, kwargs={"autocommit": True, "prepare_threshold": 0})
     return _pool
 
 @contextmanager
