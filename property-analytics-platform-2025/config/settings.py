@@ -12,6 +12,10 @@ class Settings(BaseSettings):
         default="text-embedding-3-small",
         validation_alias=AliasChoices("EMBEDDING_MODEL", "OPENAI_EMBED_MODEL"),
     )
+    embedding_dimension: int = Field(
+        default=1536,
+        validation_alias=AliasChoices("EMBEDDING_DIM", "OPENAI_EMBED_DIM", "EMBEDDING_DIMENSIONS"),
+    )
 
     # Database / Vector
     supabase_url: str | None = None

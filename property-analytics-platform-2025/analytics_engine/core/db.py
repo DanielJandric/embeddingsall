@@ -9,7 +9,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
 from ...config.settings import settings
-from ...data_pipeline.vector_store.pgvector_manager import build_hnsw_sql
+from ...data_pipeline.vector_store.pgvector_manager import build_vector_index_sql
 from ...config.settings import settings
 
 _pool: Optional[ConnectionPool] = None
@@ -76,8 +76,9 @@ def init_schema() -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_property_chunks_fts ON property_chunks USING GIN (search_vector);"
         )
-        # HNSW vector index
-        cur.execute(build_hnsw_sql(table="property_chunks", column="embedding"))
+        # Vector index (choose HNSW for dim <= 2000, otherwise IVFFLAT)
+        index_type = "hnsw" if settings.embedding_dimension <= 2000 else "ivfflat"
+        cur.execute(build_vector_index_sql(table="property_chunks", column="embedding", index_type=index_type))
 
 def insert_document(file_name: str, full_text: str) -> int:
     with get_conn() as conn:
