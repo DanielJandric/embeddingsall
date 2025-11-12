@@ -88,7 +88,7 @@ async def reindex_all(limit: int = 0):
 
 
 @router.post("/import-from-existing")
-async def import_from_existing(limit: int = 0):
+async def import_from_existing(limit: int = 100, offset: int = 0):
     """
     Import documents from existing Supabase table `documents_full` into `property_documents`,
     mapping (file_name, full_content -> file_name, full_text). Skips duplicates by file_name.
@@ -99,12 +99,14 @@ async def import_from_existing(limit: int = 0):
         cur = conn.cursor()
         # Ensure source table exists and is compatible
         try:
-            cur.execute("SELECT id, file_name, full_content FROM documents_full ORDER BY id ASC;")
+            # Fetch at most `limit` rows at the SQL level to avoid huge transfers
+            cur.execute(
+                "SELECT id, file_name, full_content FROM documents_full ORDER BY id ASC LIMIT %s OFFSET %s;",
+                (max(1, limit), max(0, offset)),
+            )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"documents_full not accessible: {e}")
         rows = cur.fetchall()
-        if limit > 0:
-            rows = rows[:limit]
         for (_src_id, file_name, full_content) in rows:
             # Skip empty content
             if not full_content:
