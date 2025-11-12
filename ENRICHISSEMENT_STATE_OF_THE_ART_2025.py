@@ -1645,18 +1645,20 @@ class EnrichmentSaver:
             # Sauvegarder aussi dans la table d'enrichissement dédiée
             enrichment_data = {
                 'document_id': enrichment.document_id,
-                'enrichment_type': 'state_of_the_art_2025',
+                'enrichment_version': 'state_of_the_art_2025',
+                'enrichment_date': datetime.now().isoformat(),
                 'enrichment_data': {
                     'summary': enrichment.summary_detailed,
                     'qa_pairs': enrichment.questions_answers,
                     'key_points': enrichment.key_points,
                     'risk_analysis': enrichment.risk_factors,
                     'relationships': enrichment.related_documents
-                },
-                'created_at': datetime.now().isoformat()
+                }
             }
             
-            self.client.table('document_enrichments').upsert(enrichment_data).execute()
+            self.client.table('document_enrichments') \
+                .upsert(enrichment_data, on_conflict='document_id') \
+                .execute()
             
             logger.info(f"[{enrichment.document_id}] Enrichissement sauvegardé")
             return True
