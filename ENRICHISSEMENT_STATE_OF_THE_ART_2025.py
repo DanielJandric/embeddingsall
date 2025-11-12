@@ -939,10 +939,20 @@ class RealEstateValueAnalyzer:
     
     def _calculate_rental_yield(self, doc: DocumentEnrichment) -> Dict:
         """Calculer le rendement locatif"""
-        loyer_mensuel = doc.metadata_swiss.get('loyer_mensuel', 0)
-        prix_vente = doc.metadata_swiss.get('prix_vente', 0)
+        loyer_mensuel_raw = doc.metadata_swiss.get('loyer_mensuel', 0)
+        prix_vente_raw = doc.metadata_swiss.get('prix_vente', 0)
+
+        try:
+            loyer_mensuel = float(loyer_mensuel_raw)
+        except (TypeError, ValueError):
+            loyer_mensuel = 0.0
+
+        try:
+            prix_vente = float(prix_vente_raw)
+        except (TypeError, ValueError):
+            prix_vente = 0.0
         
-        if loyer_mensuel and prix_vente:
+        if loyer_mensuel > 0 and prix_vente > 0:
             rendement_brut = (loyer_mensuel * 12 / prix_vente) * 100
             rendement_net = rendement_brut * 0.7  # Estimation avec charges
             
@@ -967,10 +977,20 @@ class RealEstateValueAnalyzer:
         }
         
         if city in market_data:
-            surface = doc.metadata_swiss.get('surface_m2', 0)
-            loyer = doc.metadata_swiss.get('loyer_mensuel', 0)
+            surface_raw = doc.metadata_swiss.get('surface_m2', 0)
+            loyer_raw = doc.metadata_swiss.get('loyer_mensuel', 0)
+
+            try:
+                surface = float(surface_raw)
+            except (TypeError, ValueError):
+                surface = 0.0
+
+            try:
+                loyer = float(loyer_raw)
+            except (TypeError, ValueError):
+                loyer = 0.0
             
-            if surface and loyer:
+            if surface > 0 and loyer > 0:
                 loyer_m2_actuel = loyer / surface
                 loyer_m2_marche = market_data[city]['loyer_m2']
                 
