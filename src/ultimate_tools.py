@@ -178,14 +178,28 @@ class UltimateTools:
     # Category 1 – structured data access
     # ------------------------------------------------------------------
 
-    def get_registre_foncier(
-        self,
-        parcelle_id: Optional[str],
-        commune: Optional[str],
-        adresse: Optional[str],
-        include_history: bool,
-    ) -> Dict[str, Any]:
+    def get_registre_foncier(self, **kwargs) -> Dict[str, Any]:
+        """
+        Récupère les informations du registre foncier pour une parcelle/commune/adresse.
+
+        Args (via kwargs):
+            parcelle_id (Optional[str]): Numéro de parcelle à rechercher.
+            commune (Optional[str]): Commune ciblée.
+            adresse (Optional[str]): Filtre libre sur le nom de fichier/adresse.
+            include_history (bool): Inclure l'historique des mutations (défaut False).
+
+        Returns:
+            Dict[str, Any]: Réponse standardisée contenant les enregistrements trouvés.
+
+        Example:
+            >>> tools.get_registre_foncier(commune="Fribourg", include_history=False)
+        """
         start = self._now_ms()
+        parcelle_id = kwargs.get("parcelle_id")
+        commune = kwargs.get("commune")
+        adresse = kwargs.get("adresse")
+        include_history = bool(kwargs.get("include_history", False))
+
         filters = {}
         if parcelle_id:
             filters["no_parcelle"] = parcelle_id
@@ -217,14 +231,24 @@ class UltimateTools:
                 row.pop("mutations", None)
         return self._response(True, data=rows, start_ms=start)
 
-    def search_servitudes(
-        self,
-        type_servitude: Optional[str],
-        commune: Optional[str],
-        impactant_valeur: Optional[bool],
-    ) -> Dict[str, Any]:
+    def search_servitudes(self, **kwargs) -> Dict[str, Any]:
+        """
+        Recherche les servitudes depuis les registres fonciers.
+
+        Args (via kwargs):
+            type_servitude (Optional[str]): Filtre sur le type de servitude.
+            commune (Optional[str]): Commune ciblée.
+            impactant_valeur (Optional[bool]): Filtre sur l'impact financier.
+
+        Returns:
+            Dict[str, Any]: Liste des servitudes correspondantes.
+        """
         start = self._now_ms()
-        filters = {}
+        type_servitude = kwargs.get("type_servitude")
+        commune = kwargs.get("commune")
+        impactant_valeur = kwargs.get("impactant_valeur")
+
+        filters: Dict[str, Any] = {}
         if commune:
             filters["commune"] = commune
         rows = self._query_table("registres_fonciers", filters=filters, limit=200)
@@ -259,8 +283,19 @@ class UltimateTools:
                 )
         return self._response(True, data=servitudes, start_ms=start, warnings=[] if servitudes else ["Aucune servitude correspondante."])
 
-    def analyze_charges_foncieres(self, parcelle_id: str) -> Dict[str, Any]:
+    def analyze_charges_foncieres(self, **kwargs) -> Dict[str, Any]:
+        """
+        Analyse les charges foncières d'une parcelle (gages, servitudes).
+
+        Args (via kwargs):
+            parcelle_id (str): Numéro de parcelle (obligatoire).
+
+        Returns:
+            Dict[str, Any]: Informations financières liées à la parcelle.
+        """
         start = self._now_ms()
+        parcelle_id = kwargs.get("parcelle_id")
+
         if not parcelle_id:
             return self._response(
                 False,
@@ -308,13 +343,23 @@ class UltimateTools:
 
     # ------------------- États locatifs ---------------------------------
 
-    def get_etat_locatif_complet(
-        self,
-        immeuble_id: Optional[str],
-        adresse: Optional[str],
-        date_reference: Optional[str],
-    ) -> Dict[str, Any]:
+    def get_etat_locatif_complet(self, **kwargs) -> Dict[str, Any]:
+        """
+        Retourne l'état locatif complet pour un immeuble avec KPI calculés.
+
+        Args (via kwargs):
+            immeuble_id (Optional[str]): Identifiant de l'état locatif.
+            adresse (Optional[str]): Filtre sur le nom/adresse.
+            date_reference (Optional[str]): Non utilisé actuellement, conservé pour compatibilité.
+
+        Returns:
+            Dict[str, Any]: Liste d'états locatifs enrichis.
+        """
         start = self._now_ms()
+        immeuble_id = kwargs.get("immeuble_id")
+        adresse = kwargs.get("adresse")
+        # date_reference accepté mais inutilisé pour l'instant
+
         filters = {}
         if immeuble_id:
             filters["id"] = immeuble_id
@@ -350,13 +395,31 @@ class UltimateTools:
         result = df.to_dict(orient="records")
         return self._response(True, data=result, start_ms=start)
 
-    def analyze_loyers_marche(
-        self,
-        adresse: str,
-        usage: Optional[str],
-        rayon_km: float,
-    ) -> Dict[str, Any]:
+    def analyze_loyers_marche(self, **kwargs) -> Dict[str, Any]:
+        """
+        Compare les loyers observés à la moyenne de marché dans un rayon donné.
+
+        Args (via kwargs):
+            adresse (str): Adresse de référence (obligatoire).
+            usage (Optional[str]): Type d'usage (bureau, commerce, etc.).
+            rayon_km (float): Rayon de recherche en km (défaut 2.0).
+
+        Returns:
+            Dict[str, Any]: Statistiques agrégées (moyenne, médiane, percentiles).
+        """
         start = self._now_ms()
+        adresse = kwargs.get("adresse")
+        usage = kwargs.get("usage")
+        try:
+            rayon_km = float(kwargs.get("rayon_km", 2.0))
+        except (TypeError, ValueError):
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "rayon_km doit être un nombre."),
+            )
+
         if not adresse:
             return self._response(
                 False,
@@ -389,11 +452,24 @@ class UltimateTools:
             "loyer_m2_p90": float(subset["loyer_m2"].quantile(0.9)),
             "loyer_m2_p10": float(subset["loyer_m2"].quantile(0.1)),
             "echantillon": int(len(subset)),
+            "rayon_km": rayon_km,
+            "usage": usage,
         }
         return self._response(True, data=stats, start_ms=start, warnings=[] if subset.size else ["Filtre trop restreint, utilisation des données nationales."])
 
-    def detect_anomalies_locatives(self, immeuble_id: str) -> Dict[str, Any]:
+    def detect_anomalies_locatives(self, **kwargs) -> Dict[str, Any]:
+        """
+        Détecte les anomalies locatives (loyer sous marché, vacance élevée).
+
+        Args (via kwargs):
+            immeuble_id (str): Identifiant de l'état locatif (obligatoire).
+
+        Returns:
+            Dict[str, Any]: Liste d'anomalies identifiées.
+        """
         start = self._now_ms()
+        immeuble_id = kwargs.get("immeuble_id")
+
         if not immeuble_id:
             return self._response(
                 False,
@@ -450,7 +526,17 @@ class UltimateTools:
                 )
         return self._response(True, data=anomalies, start_ms=start)
 
-    def get_echeancier_baux(self, immeuble_id: Optional[str], periode_mois: int) -> Dict[str, Any]:
+    def get_echeancier_baux(self, **kwargs) -> Dict[str, Any]:
+        """
+        Échéancier des baux pour un immeuble (placeholder).
+
+        Args (via kwargs):
+            immeuble_id (Optional[str]): Identifiant de l'immeuble.
+            periode_mois (int): Période de projection en mois (défaut 24).
+
+        Returns:
+            Dict[str, Any]: Placeholder indiquant la non disponibilité actuelle.
+        """
         start = self._now_ms()
         # TODO: Need dedicated table (baux) not yet available.
         return self._not_available("get_echeancier_baux", start)
@@ -459,17 +545,38 @@ class UltimateTools:
     # Category 2 – SQL & analytics
     # ------------------------------------------------------------------
 
-    def query_table(
-        self,
-        table_name: str,
-        filters: Optional[Dict[str, Any]],
-        select: str,
-        joins: Optional[List[Dict[str, Any]]],
-        order_by: Optional[str],
-        limit: int,
-        offset: int,
-    ) -> Dict[str, Any]:
+    def query_table(self, **kwargs) -> Dict[str, Any]:
+        """
+        Requête flexible sur une table Supabase.
+
+        Args (via kwargs):
+            table_name (str): Nom de la table (obligatoire).
+            filters (Optional[dict]): Dictionnaire de filtres colonne -> valeur.
+            select (str): Colonnes à sélectionner (défaut "*").
+            joins (Optional[list]): Non supporté pour le moment.
+            order_by (Optional[str]): Clause ORDER BY (ex: "created_at desc").
+            limit (int): Limite de lignes (défaut 100).
+            offset (int): Offset de pagination (défaut 0).
+
+        Returns:
+            Dict[str, Any]: Résultats de la requête.
+        """
         start = self._now_ms()
+        table_name = kwargs.get("table_name")
+        if not table_name:
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "table_name est obligatoire."),
+            )
+        filters = kwargs.get("filters") or {}
+        select = kwargs.get("select", "*")
+        joins = kwargs.get("joins")
+        order_by = kwargs.get("order_by")
+        limit = int(kwargs.get("limit", 100))
+        offset = int(kwargs.get("offset", 0))
+
         if joins:
             return self._not_available("query_table (joins)", start)
         try:
@@ -494,23 +601,64 @@ class UltimateTools:
         except Exception as exc:
             return self._response(False, data=None, start_ms=start, error=self._error("query_failed", str(exc)))
 
-    def execute_raw_sql(self, query: str, params: Optional[Dict[str, Any]], read_only: bool) -> Dict[str, Any]:
+    def execute_raw_sql(self, **kwargs) -> Dict[str, Any]:
+        """
+        Exécute une requête SQL brute (placeholder).
+
+        Args (via kwargs):
+            query (str): Requête SQL.
+            params (Optional[dict]): Paramètres.
+            read_only (bool): Lecture seule (défaut True).
+
+        Returns:
+            Dict[str, Any]: Placeholder indiquant la non disponibilité.
+        """
         start = self._now_ms()
         return self._not_available("execute_raw_sql", start)
 
-    def bulk_update(self, table_name: str, updates: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def bulk_update(self, **kwargs) -> Dict[str, Any]:
+        """
+        Met à jour en masse des enregistrements (placeholder).
+
+        Args (via kwargs):
+            table_name (str): Nom de la table.
+            updates (list[dict]): Updates à appliquer.
+
+        Returns:
+            Dict[str, Any]: Placeholder.
+        """
         start = self._now_ms()
         return self._not_available("bulk_update", start)
 
-    def aggregate_data(
-        self,
-        table_name: str,
-        group_by: List[str],
-        aggregations: Dict[str, Dict[str, str]],
-        filters: Optional[Dict[str, Any]],
-        having: Optional[Dict[str, Any]],
-    ) -> Dict[str, Any]:
+    def aggregate_data(self, **kwargs) -> Dict[str, Any]:
+        """
+        Réalise des agrégations groupées sur une table.
+
+        Args (via kwargs):
+            table_name (str): Table cible (obligatoire).
+            group_by (list[str]): Colonnes de groupement (obligatoire).
+            aggregations (dict): Spécification des agrégations (obligatoire).
+            filters (Optional[dict]): Filtres simples.
+            having (Optional[dict]): Conditions HAVING.
+
+        Returns:
+            Dict[str, Any]: Résultats agrégés.
+        """
         start = self._now_ms()
+        table_name = kwargs.get("table_name")
+        group_by = kwargs.get("group_by") or []
+        aggregations = kwargs.get("aggregations") or {}
+        filters = kwargs.get("filters")
+        having = kwargs.get("having")
+
+        if not table_name or not group_by or not aggregations:
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "table_name, group_by et aggregations sont obligatoires."),
+            )
+
         rows = self._query_table(table_name, filters=filters, limit=5000)
         if not rows:
             return self._response(
@@ -549,15 +697,35 @@ class UltimateTools:
         except Exception as exc:
             return self._response(False, data=None, start_ms=start, error=self._error("aggregation_failed", str(exc)))
 
-    def pivot_table(
-        self,
-        table_name: str,
-        rows: List[str],
-        columns: str,
-        values: str,
-        aggfunc: str,
-    ) -> Dict[str, Any]:
+    def pivot_table(self, **kwargs) -> Dict[str, Any]:
+        """
+        Crée un tableau croisé dynamique.
+
+        Args (via kwargs):
+            table_name (str): Table cible (obligatoire).
+            rows (list[str]): Colonnes en lignes (obligatoire).
+            columns (str): Colonne en colonnes (obligatoire).
+            values (str): Colonne de valeur (obligatoire).
+            aggfunc (str): Fonction d'agrégation (défaut "sum").
+
+        Returns:
+            Dict[str, Any]: Tableau pivoté.
+        """
         start = self._now_ms()
+        table_name = kwargs.get("table_name")
+        rows = kwargs.get("rows")
+        columns = kwargs.get("columns")
+        values = kwargs.get("values")
+        aggfunc = kwargs.get("aggfunc", "sum")
+
+        if not all([table_name, rows, columns, values]):
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "table_name, rows, columns et values sont obligatoires."),
+            )
+
         rows_data = self._query_table(table_name, limit=5000)
         if not rows_data:
             return self._response(
@@ -574,15 +742,35 @@ class UltimateTools:
         except Exception as exc:
             return self._response(False, data=None, start_ms=start, error=self._error("pivot_failed", str(exc)))
 
-    def time_series_analysis(
-        self,
-        table_name: str,
-        date_column: str,
-        value_column: str,
-        interval: str,
-        aggregation: str,
-    ) -> Dict[str, Any]:
+    def time_series_analysis(self, **kwargs) -> Dict[str, Any]:
+        """
+        Analyse une série temporelle (agrégations + taux de croissance).
+
+        Args (via kwargs):
+            table_name (str): Table cible (obligatoire).
+            date_column (str): Colonne date (obligatoire).
+            value_column (str): Colonne de valeur numérique (obligatoire).
+            interval (str): Intervalle ("month", "quarter", "year") (défaut "month").
+            aggregation (str): Fonction ("sum", "avg", "median", etc.) (défaut "sum").
+
+        Returns:
+            Dict[str, Any]: Résultats temporels.
+        """
         start = self._now_ms()
+        table_name = kwargs.get("table_name")
+        date_column = kwargs.get("date_column")
+        value_column = kwargs.get("value_column")
+        interval = kwargs.get("interval", "month")
+        aggregation = kwargs.get("aggregation", "sum")
+
+        if not all([table_name, date_column, value_column]):
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "table_name, date_column et value_column sont obligatoires."),
+            )
+
         rows = self._query_table(table_name, limit=5000)
         if not rows:
             return self._response(
@@ -630,34 +818,34 @@ class UltimateTools:
     # Categories 3 – 15: placeholders (to be implemented)
     # ------------------------------------------------------------------
 
-    def calculate_dcf(self, *args, **kwargs):
+    def calculate_dcf(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("calculate_dcf", self._now_ms())
 
-    def sensitivity_analysis(self, *args, **kwargs):
+    def sensitivity_analysis(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("sensitivity_analysis", self._now_ms())
 
-    def calculate_rendements(self, *args, **kwargs):
+    def calculate_rendements(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("calculate_rendements", self._now_ms())
 
-    def simulate_scenarios(self, *args, **kwargs):
+    def simulate_scenarios(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("simulate_scenarios", self._now_ms())
 
-    def risk_assessment(self, *args, **kwargs):
+    def risk_assessment(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("risk_assessment", self._now_ms())
 
-    def stress_test(self, *args, **kwargs):
+    def stress_test(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("stress_test", self._now_ms())
 
-    def covenant_compliance(self, *args, **kwargs):
+    def covenant_compliance(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("covenant_compliance", self._now_ms())
 
-    def get_cash_flows(self, *args, **kwargs):
+    def get_cash_flows(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("get_cash_flows", self._now_ms())
 
-    def get_valorisations(self, *args, **kwargs):
+    def get_valorisations(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("get_valorisations", self._now_ms())
 
-    def get_charges_exploitation(self, *args, **kwargs):
+    def get_charges_exploitation(self, **kwargs) -> Dict[str, Any]:
         return self._not_available("get_charges_exploitation", self._now_ms())
 
     # Placeholder for remaining categories (4 → 15)
