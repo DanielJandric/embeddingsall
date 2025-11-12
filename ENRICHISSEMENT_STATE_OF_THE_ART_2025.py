@@ -27,13 +27,30 @@ from sklearn.decomposition import LatentDirichletAllocation
 import spacy
 from transformers import pipeline
 import pandas as pd
+import argparse
+import math
 
 # Configuration du logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - [%(levelname)s] %(message)s'
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("enrichment_2025")
+
+LOG_FILE = os.getenv("ENRICH_LOG_FILE", "enrichissement_progress.log")
+try:
+    log_path = os.path.abspath(LOG_FILE)
+    already_has_handler = any(
+        isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == log_path
+        for h in logger.handlers
+    )
+    if not already_has_handler:
+        file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        file_handler.setLevel(logging.INFO)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - [%(levelname)s] %(message)s'))
+        logger.addHandler(file_handler)
+except Exception as log_exc:
+    logger.warning(f"Impossible d'initialiser le fichier de logs '{LOG_FILE}': {log_exc}")
 
 try:
     from dotenv import load_dotenv
@@ -1701,91 +1718,138 @@ class EnrichmentSaver:
 
 # ================== MAIN EXECUTION ==================
 
-async def main():
-    """Fonction principale d'enrichissement"""
+async def main(*, auto_confirm: bool = False, limit: Optional[int] = None,
+               batch_size: int = 50, include_existing: bool = False) -> None:
+    """Fonction principale d'enrichissement."""
     
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("ENRICHISSEMENT STATE OF THE ART 2025")
-    print("="*80)
+    print("=" * 80)
+    logger.info("Démarrage du pipeline d'enrichissement (auto_confirm=%s, limit=%s, batch_size=%s, include_existing=%s)",
+                auto_confirm, limit, batch_size, include_existing)
     
-    # Initialiser les composants
     pipeline = EnrichmentPipeline()
     saver = EnrichmentSaver()
     
-    # Récupérer les documents depuis Supabase
     print("\n[1] Récupération des documents...")
     from supabase import create_client
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    # Récupérer tous les documents
     response = client.table('documents_full').select('id, file_name, full_content').execute()
-    documents = response.data
-    
+    documents = response.data or []
+    logger.info("Documents récupérés: %s", len(documents))
     print(f"  -> {len(documents)} documents trouvés")
     
-    # Filtrer les documents déjà enrichis (optionnel)
-    enriched_response = client.table('document_enrichments').select('document_id').execute()
-    enriched_ids = {r['document_id'] for r in enriched_response.data}
+    enriched_ids: set[int] = set()
+    if not include_existing:
+        enriched_response = client.table('document_enrichments').select('document_id').execute()
+        enriched_ids = {r['document_id'] for r in (enriched_response.data or [])}
+        logger.info("Documents déjà enrichis: %s", len(enriched_ids))
     
-    documents_to_process = [
-        (doc['id'], doc['full_content'], doc['file_name'])
-        for doc in documents
-        if doc['id'] not in enriched_ids  # Skip déjà enrichis
-    ]
+    documents_to_process: List[Tuple[int, str, str]] = []
+    for doc in documents:
+        doc_id = doc.get('id')
+        if doc_id is None:
+            continue
+        if not include_existing and doc_id in enriched_ids:
+            continue
+        documents_to_process.append((doc_id, doc.get('full_content', ''), doc.get('file_name', f"doc_{doc_id}")))
     
-    print(f"  -> {len(documents_to_process)} documents à enrichir")
+    if limit:
+        documents_to_process = documents_to_process[:max(limit, 0)]
     
-    if not documents_to_process:
+    total_documents = len(documents_to_process)
+    print(f"  -> {total_documents} documents à enrichir")
+    logger.info("Documents à traiter après filtrage: %s", total_documents)
+    
+    if total_documents == 0:
         print("\n[INFO] Tous les documents sont déjà enrichis!")
+        logger.info("Aucun document à traiter, arrêt.")
         return
     
-    # Demander confirmation
-    response = input(f"\nEnrichir {len(documents_to_process)} documents? (o/n): ")
-    if response.lower() != 'o':
-        print("Annulé.")
-        return
+    if not auto_confirm:
+        try:
+            response = input(f"\nEnrichir {total_documents} documents? (o/n): ")
+            if response.strip().lower() != 'o':
+                print("Annulé.")
+                logger.info("Enrichissement annulé par l'utilisateur.")
+                return
+        except EOFError:
+            print("Entrée utilisateur indisponible. Relancez avec --yes pour confirmer automatiquement.")
+            logger.warning("Entrée utilisateur indisponible (EOF). Annulation.")
+            return
+    else:
+        print("  -> Confirmation automatique activée (--yes)")
     
-    # Traiter par batches
-    print(f"\n[2] Enrichissement avec {sum(WORKERS_CONFIG.values())} workers total...")
+    total_workers = sum(WORKERS_CONFIG.values())
+    print(f"\n[2] Enrichissement avec {total_workers} workers total...")
+    logger.info("Workers configurés: %s (semantic=%s)", total_workers, WORKERS_CONFIG.get('semantic_enrichment'))
     
-    batch_size = 50
-    all_enrichments = []
+    batch_size = max(1, int(batch_size))
+    total_batches = math.ceil(total_documents / batch_size)
+    all_enrichments: List[DocumentEnrichment] = []
+    global_start = datetime.now()
     
-    for i in range(0, len(documents_to_process), batch_size):
-        batch = documents_to_process[i:i+batch_size]
-        print(f"\n  Batch {i//batch_size + 1}/{(len(documents_to_process)-1)//batch_size + 1}")
+    for batch_index in range(total_batches):
+        start_idx = batch_index * batch_size
+        batch = documents_to_process[start_idx:start_idx + batch_size]
+        batch_number = batch_index + 1
+        print(f"\n  Batch {batch_number}/{total_batches}")
+        logger.info("Traitement du batch %s/%s (%s documents)", batch_number, total_batches, len(batch))
         
-        # Traiter le batch
+        batch_start = datetime.now()
         enrichments = await pipeline.process_batch(
             batch,
             max_workers=WORKERS_CONFIG['semantic_enrichment']
         )
-        
+        batch_duration = (datetime.now() - batch_start).total_seconds()
         all_enrichments.extend(enrichments)
         
-        # Sauvegarder au fur et à mesure
         print(f"  Sauvegarde de {len(enrichments)} enrichissements...")
+        logger.info("Sauvegarde de %s enrichissements (durée batch: %.2fs)", len(enrichments), batch_duration)
         for enrichment in enrichments:
             saver.save_enrichment(enrichment)
+        
+        processed = len(all_enrichments)
+        elapsed = (datetime.now() - global_start).total_seconds()
+        progress = processed / total_documents if total_documents else 0
+        rate = processed / elapsed if elapsed > 0 else 0
+        remaining_docs = total_documents - processed
+        eta_seconds = remaining_docs / rate if rate > 0 else None
+        
+        print(f"  Progression: {progress*100:.1f}% ({processed}/{total_documents})")
+        if rate > 0:
+            print(f"  Cadence moyenne: {rate:.2f} doc/s | ETA: {str(timedelta(seconds=int(eta_seconds))) if eta_seconds else 'calcul...'}")
+        logger.info("Progression: %.1f%% (%s/%s) | Cadence %.2f doc/s | ETA %s",
+                    progress * 100, processed, total_documents, rate,
+                    str(timedelta(seconds=int(eta_seconds))) if eta_seconds else "N/A")
     
-    # Sauvegarder le graphe de connaissances
     if pipeline.graph_builder.graph:
         print("\n[3] Sauvegarde du graphe de connaissances...")
+        logger.info("Sauvegarde du graphe de connaissances.")
         saver.save_knowledge_graph(pipeline.graph_builder.graph)
     
-    # Afficher les statistiques
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("STATISTIQUES FINALES")
-    print("="*80)
+    print("=" * 80)
     
     stats = pipeline.get_statistics()
     for key, value in stats.items():
         print(f"  {key}: {value}")
+    logger.info("Statistiques finales: %s", stats)
     
-    print("\n[TERMINÉ] Enrichissement State of the Art 2025 complété!")
+    total_duration = (datetime.now() - global_start).total_seconds()
+    print(f"\n[TERMINÉ] Enrichissement State of the Art 2025 complété en {timedelta(seconds=int(total_duration))} !")
+    logger.info("Pipeline terminé en %ss", total_duration)
 
 if __name__ == "__main__":
-    # Installer les dépendances si nécessaire
+    parser = argparse.ArgumentParser(description="Enrichissement State of the Art 2025")
+    parser.add_argument("--yes", "-y", action="store_true", help="Confirmer automatiquement la procédure")
+    parser.add_argument("--limit", type=int, default=None, help="Limiter le nombre de documents à traiter")
+    parser.add_argument("--batch-size", type=int, default=50, help="Taille des batches (défaut: 50)")
+    parser.add_argument("--include-existing", action="store_true", help="Inclure les documents déjà enrichis")
+    args = parser.parse_args()
+
     try:
         import spacy
         import networkx
@@ -1796,5 +1860,11 @@ if __name__ == "__main__":
         os.system("pip install spacy networkx scikit-learn transformers")
         os.system("python -m spacy download fr_core_news_sm")
     
-    # Lancer l'enrichissement
-    asyncio.run(main())
+    asyncio.run(
+        main(
+            auto_confirm=args.yes,
+            limit=args.limit,
+            batch_size=args.batch_size,
+            include_existing=args.include_existing,
+        )
+    )
