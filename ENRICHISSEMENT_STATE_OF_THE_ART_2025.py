@@ -1722,15 +1722,55 @@ async def main(
     from supabase import create_client
     client = create_client(SUPABASE_URL, SUPABASE_KEY)
     
-    response = client.table('documents_full').select('id, file_name, full_content').execute()
-    documents = response.data or []
-    logger.info("Documents récupérés: %s", len(documents))
+    page_size = 1000
+    documents: List[Dict[str, Any]] = []
+    offset = 0
+
+    while True:
+        response = (
+            client.table('documents_full')
+            .select('id, file_name, full_content')
+            .range(offset, offset + page_size - 1)
+            .execute()
+        )
+        batch = response.data or []
+        documents.extend(batch)
+
+        logger.info(
+            "Documents récupérés (batch %s): %s",
+            (offset // page_size) + 1,
+            len(batch)
+        )
+
+        if len(batch) < page_size:
+            break
+
+        offset += page_size
+
+        if limit is not None and len(documents) >= limit:
+            documents = documents[:limit]
+            break
+
+    logger.info("Total documents récupérés: %s", len(documents))
     print(f"  -> {len(documents)} documents trouvés")
     
     enriched_ids: set[int] = set()
     if not include_existing:
-        enriched_response = client.table('document_enrichments').select('document_id').execute()
-        enriched_ids = {r['document_id'] for r in (enriched_response.data or [])}
+        enriched_offset = 0
+        while True:
+            enriched_resp = (
+                client.table('document_enrichments')
+                .select('document_id')
+                .range(enriched_offset, enriched_offset + page_size - 1)
+                .execute()
+            )
+            enriched_batch = enriched_resp.data or []
+            enriched_ids.update(
+                r['document_id'] for r in enriched_batch if r.get('document_id') is not None
+            )
+            if len(enriched_batch) < page_size:
+                break
+            enriched_offset += page_size
         logger.info("Documents déjà enrichis: %s", len(enriched_ids))
     
     documents_to_process: List[Tuple[int, str, str]] = []
