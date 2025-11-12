@@ -1664,14 +1664,10 @@ class EnrichmentSaver:
             }
             
             # Mettre à jour le document
-            response = (
-                self.client.table('documents_full')
-                .update(update_data)
-                .eq('id', enrichment.document_id)
+            self.client.table('documents_full') \
+                .update(update_data) \
+                .eq('id', enrichment.document_id) \
                 .execute()
-            )
-            if getattr(response, "error", None):
-                logger.warning(f"Update documents_full erreur: {response.error}")
             
             # Sauvegarder aussi dans la table d'enrichissement dédiée
             enrichment_data = {
