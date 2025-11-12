@@ -62,7 +62,7 @@ async def search(body: SearchRequest):
     return {"results": rows}
 
 @router.post("/reindex-all")
-async def reindex_all(limit: int = 0):
+async def reindex_all(limit: int = 0, offset: int = 0):
     """
     Re-chunk & re-embed all documents in property_documents.
     If limit>0, process only first N docs.
@@ -71,10 +71,14 @@ async def reindex_all(limit: int = 0):
     cnt = 0
     with get_conn() as conn:
         cur = conn.cursor()
-        cur.execute("SELECT id, file_name, full_text FROM property_documents ORDER BY id ASC;")
+        if limit and limit > 0:
+            cur.execute(
+                "SELECT id, file_name, full_text FROM property_documents ORDER BY id ASC LIMIT %s OFFSET %s;",
+                (limit, max(0, offset)),
+            )
+        else:
+            cur.execute("SELECT id, file_name, full_text FROM property_documents ORDER BY id ASC;")
         rows = cur.fetchall()
-        if limit > 0:
-            rows = rows[:limit]
         for (doc_id, file_name, full_text) in rows:
             # Delete existing chunks
             cur.execute("DELETE FROM property_chunks WHERE document_id = %s;", (doc_id,))
