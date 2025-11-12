@@ -1718,8 +1718,14 @@ class EnrichmentSaver:
 
 # ================== MAIN EXECUTION ==================
 
-async def main(*, auto_confirm: bool = False, limit: Optional[int] = None,
-               batch_size: int = 50, include_existing: bool = False) -> None:
+async def main(
+    *,
+    auto_confirm: bool = False,
+    limit: Optional[int] = None,
+    batch_size: int = 50,
+    include_existing: bool = False,
+    semantic_workers: Optional[int] = None,
+) -> None:
     """Fonction principale d'enrichissement."""
     
     print("\n" + "=" * 80)
@@ -1781,9 +1787,17 @@ async def main(*, auto_confirm: bool = False, limit: Optional[int] = None,
     else:
         print("  -> Confirmation automatique activée (--yes)")
     
-    total_workers = sum(WORKERS_CONFIG.values())
-    print(f"\n[2] Enrichissement avec {total_workers} workers total...")
-    logger.info("Workers configurés: %s (semantic=%s)", total_workers, WORKERS_CONFIG.get('semantic_enrichment'))
+    semantic_workers = max(1, int(semantic_workers or WORKERS_CONFIG['semantic_enrichment']))
+    current_workers = WORKERS_CONFIG.copy()
+    current_workers['semantic_enrichment'] = semantic_workers
+    total_workers = sum(current_workers.values())
+    print(f"\n[2] Enrichissement avec {total_workers} workers total (semantic={semantic_workers})...")
+    logger.info(
+        "Workers configurés: %s (semantic=%s) | configuration complète: %s",
+        total_workers,
+        semantic_workers,
+        current_workers,
+    )
     
     batch_size = max(1, int(batch_size))
     total_batches = math.ceil(total_documents / batch_size)
@@ -1800,7 +1814,7 @@ async def main(*, auto_confirm: bool = False, limit: Optional[int] = None,
         batch_start = datetime.now()
         enrichments = await pipeline.process_batch(
             batch,
-            max_workers=WORKERS_CONFIG['semantic_enrichment']
+            max_workers=semantic_workers,
         )
         batch_duration = (datetime.now() - batch_start).total_seconds()
         all_enrichments.extend(enrichments)
@@ -1848,6 +1862,7 @@ if __name__ == "__main__":
     parser.add_argument("--limit", type=int, default=None, help="Limiter le nombre de documents à traiter")
     parser.add_argument("--batch-size", type=int, default=50, help="Taille des batches (défaut: 50)")
     parser.add_argument("--include-existing", action="store_true", help="Inclure les documents déjà enrichis")
+    parser.add_argument("--workers", type=int, default=None, help="Nombre de workers pour l'enrichissement sémantique (défaut configuration)")
     args = parser.parse_args()
 
     try:
@@ -1866,5 +1881,6 @@ if __name__ == "__main__":
             limit=args.limit,
             batch_size=args.batch_size,
             include_existing=args.include_existing,
+            semantic_workers=args.workers,
         )
     )
