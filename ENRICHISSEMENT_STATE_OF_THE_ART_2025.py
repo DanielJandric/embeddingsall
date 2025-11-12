@@ -1656,10 +1656,8 @@ class EnrichmentSaver:
                     'relationships': enrichment.related_documents
                 }
             }
-            
-            self.client.table('document_enrichments') \
-                .upsert(enrichment_data, on_conflict='document_id') \
-                .execute()
+
+            self.client.table('document_enrichments').insert(enrichment_data).execute()
             
             logger.info(f"[{enrichment.document_id}] Enrichissement sauvegardé")
             return True
