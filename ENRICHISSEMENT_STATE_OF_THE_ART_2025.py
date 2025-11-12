@@ -1647,6 +1647,7 @@ class EnrichmentSaver:
                 'document_id': enrichment.document_id,
                 'enrichment_version': 'state_of_the_art_2025',
                 'enrichment_date': datetime.now().isoformat(),
+                'processing_time_ms': int(enrichment.metadata_swiss.get('processing_time_ms', 0) or 0),
                 'enrichment_data': {
                     'summary': enrichment.summary_detailed,
                     'qa_pairs': enrichment.questions_answers,
