@@ -87,3 +87,37 @@ async def reindex_all(limit: int = 0):
     return {"reindexed_documents": cnt}
 
 
+@router.post("/import-from-existing")
+async def import_from_existing(limit: int = 0):
+    """
+    Import documents from existing Supabase table `documents_full` into `property_documents`,
+    mapping (file_name, full_content -> file_name, full_text). Skips duplicates by file_name.
+    """
+    from ...analytics_engine.core.db import get_conn
+    imported = 0
+    with get_conn() as conn:
+        cur = conn.cursor()
+        # Ensure source table exists and is compatible
+        try:
+            cur.execute("SELECT id, file_name, full_content FROM documents_full ORDER BY id ASC;")
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"documents_full not accessible: {e}")
+        rows = cur.fetchall()
+        if limit > 0:
+            rows = rows[:limit]
+        for (_src_id, file_name, full_content) in rows:
+            # Skip empty content
+            if not full_content:
+                continue
+            # Avoid duplicate by file_name
+            cur.execute("SELECT id FROM property_documents WHERE file_name = %s;", (file_name,))
+            exists = cur.fetchone()
+            if exists:
+                continue
+            cur.execute(
+                "INSERT INTO property_documents (file_name, full_text) VALUES (%s, %s);",
+                (file_name, full_content),
+            )
+            imported += 1
+    return {"imported_documents": imported}
+
