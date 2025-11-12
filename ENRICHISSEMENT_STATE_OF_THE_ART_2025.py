@@ -480,7 +480,6 @@ class SemanticEnricher:
     
     def __init__(self):
         self.openai_client = None
-        self.anthropic_client = None
         self._init_clients()
     
     def _init_clients(self):
@@ -490,12 +489,6 @@ class SemanticEnricher:
             self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
         except:
             logger.warning("OpenAI client non disponible")
-        
-        try:
-            import anthropic
-            self.anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        except:
-            logger.warning("Anthropic client non disponible")
     
     async def enrich_document(self, text: str, metadata: Dict) -> Dict:
         """Enrichissement complet d'un document"""
@@ -1263,6 +1256,18 @@ class RiskAnalyzer(RealEstateValueAnalyzer):
 class SubstanceGenerator:
     """Génère de la VRAIE SUBSTANCE - pas du blabla"""
     
+    def __init__(self):
+        self.openai_client = None
+        self._init_client()
+
+    def _init_client(self):
+        try:
+            from openai import OpenAI
+            self.openai_client = OpenAI(api_key=OPENAI_API_KEY)
+        except Exception as exc:
+            logger.warning(f"OpenAI client non disponible pour SubstanceGenerator: {exc}")
+            self.openai_client = None
+    
     async def generate_actionable_insights(self, doc: DocumentEnrichment, text: str) -> Dict:
         """Générer des insights CONCRETS et ACTIONNABLES"""
         
@@ -1613,9 +1618,7 @@ class EnrichmentSaver:
         """Sauvegarder un enrichissement"""
         try:
             # Préparer les données pour Supabase
-            data = {
-                'document_id': enrichment.document_id,
-                
+            update_data = {
                 # Métadonnées Suisse
                 'canton': enrichment.metadata_swiss.get('canton'),
                 'commune': enrichment.metadata_swiss.get('commune'),
@@ -1661,7 +1664,7 @@ class EnrichmentSaver:
             }
             
             # Mettre à jour le document
-            response = self.client.table('documents_full').update(data).eq(
+            response = self.client.table('documents_full').update(update_data).eq(
                 'id', enrichment.document_id
             ).execute()
             
