@@ -1685,7 +1685,9 @@ class EnrichmentSaver:
                 'created_at': datetime.now().isoformat()
             }
             
-            self.client.table('knowledge_graph').upsert(graph_data).execute()
+            self.client.table('knowledge_graph') \
+                .upsert(graph_data, on_conflict='graph_type') \
+                .execute()
             
             logger.info("Graphe de connaissances sauvegardé")
             return True
