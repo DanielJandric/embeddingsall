@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     fulltext_weight: float = 0.4
     hnsw_ef_search: int = 100
 
+    # Reranker
+    rerank_model: str = Field(default="gpt-4o-mini", validation_alias=AliasChoices("RERANK_MODEL"))
+    rerank_max_candidates: int = Field(default=50, validation_alias=AliasChoices("RERANK_MAX_CANDIDATES"))
+
     class Config:
         env_file = ".env"
         extra = "ignore"

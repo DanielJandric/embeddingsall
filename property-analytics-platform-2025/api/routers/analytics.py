@@ -43,6 +43,9 @@ class SearchRequest(BaseModel):
     mode: str = "hybrid"  # "semantic" or "hybrid"
     semantic_weight: float | None = None
     fulltext_weight: float | None = None
+    rerank: bool = False
+    rerank_top_k: int | None = None
+    rerank_model: str | None = None
 
 @router.post("/search")
 async def search(body: SearchRequest):
@@ -58,6 +61,25 @@ async def search(body: SearchRequest):
             top_k=body.top_k,
             semantic_weight=body.semantic_weight if body.semantic_weight is not None else settings.semantic_weight,
             fulltext_weight=body.fulltext_weight if body.fulltext_weight is not None else settings.fulltext_weight,
+        )
+    # Optional reranking with LLM (uses larger model quality)
+    if body.rerank and rows:
+        from ...ai_engine.rag.reranker import rerank_with_openai
+        # Convert rows (list[dict]) to expected format: ensure 'content' key exists
+        candidates = []
+        for r in rows:
+            # SQL may use 'content' column name; ensure presence
+            content = r.get("content") or r.get("chunk_content") or r.get("text") or ""
+            rr = dict(r)
+            rr["content"] = content
+            candidates.append(rr)
+        top_k = body.rerank_top_k if body.rerank_top_k is not None else body.top_k
+        rows = rerank_with_openai(
+            query=body.query,
+            candidates=candidates,
+            content_key="content",
+            top_k=top_k,
+            model=body.rerank_model,
         )
     return {"results": rows}
 
