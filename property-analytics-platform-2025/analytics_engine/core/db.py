@@ -95,29 +95,19 @@ def insert_chunks(document_id: int, chunks: List[str], embeddings: List[List[flo
         raise ValueError("chunks and embeddings length mismatch")
     with get_conn() as conn:
         cur = conn.cursor()
-        rows = []
-        for idx, (content, emb) in enumerate(zip(chunks, embeddings)):
-            rows.append(
-                (
-                    document_id,
-                    idx,
-                    content,
-                    len(content),
-                    emb,
-                    # Basic FTS vector (French + English)
-                    # Use unaccent + french if available; keep simple here
-                    None,
-                )
-            )
-        # Insert rows; fill search_vector via to_tsvector on server side
-        cur.executemany(
-            """
+        inserted = 0
+        sql_insert = """
             INSERT INTO property_chunks (document_id, chunk_index, content, chunk_size, embedding, search_vector)
             VALUES (%s, %s, %s, %s, %s, to_tsvector('simple', %s));
-            """,
-            [(d, i, c, s, emb, c) for (d, i, c, s, emb, _sv) in rows],
-        )
-        return len(rows)
+        """
+        # Avoid executemany to prevent prepared statement conflicts with PgBouncer
+        for idx, (content, emb) in enumerate(zip(chunks, embeddings)):
+            cur.execute(
+                sql_insert,
+                (document_id, idx, content, len(content), emb, content),
+            )
+            inserted += 1
+        return inserted
 
 def semantic_search(query_embedding: List[float], top_k: int = 10) -> List[dict]:
     with get_conn() as conn:
