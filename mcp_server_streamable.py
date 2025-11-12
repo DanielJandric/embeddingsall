@@ -224,7 +224,23 @@ def format_result(result: Dict[str, Any]) -> str:
     return json.dumps(result, ensure_ascii=False, indent=2)
 
 
-async def call_ultimate(method_name: str, **kwargs) -> str:
+def _merge_params(payload: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    if isinstance(kwargs, dict):
+        params.update(kwargs)
+    if isinstance(payload, str) and payload.strip():
+        try:
+            parsed = json.loads(payload)
+            if isinstance(parsed, dict):
+                params.update(parsed)
+        except Exception as exc:  # noqa: BLE001
+            params.setdefault("__parse_error__", str(exc))
+    elif isinstance(payload, dict):
+        params.update(payload)
+    return params
+
+
+async def call_ultimate(method_name: str, payload: Any = None, **kwargs) -> str:
     if not ultimate_tools:
         return format_result(
             {
@@ -241,13 +257,20 @@ async def call_ultimate(method_name: str, **kwargs) -> str:
                 "error": {"code": "not_initialized", "message": "Ultimate tools indisponibles.", "details": {}},
             }
         )
-    result = await asyncio.to_thread(ultimate_tools.run_sync, method_name, **kwargs)
+    params = _merge_params(payload, kwargs)
+    parse_warning = params.pop("__parse_error__", None)
+    result = await asyncio.to_thread(ultimate_tools.run_sync, method_name, **params)
+    if parse_warning and isinstance(result, dict):
+        meta = result.setdefault("metadata", {})
+        warnings = meta.setdefault("warnings", [])
+        warnings.append(f"Payload JSON non parsé: {parse_warning}")
+
     return format_result(result)
 
 
 def register_tool(method_name: str, description: str):
-    async def tool_wrapper(**kwargs):
-        return await call_ultimate(method_name, **kwargs)
+    async def tool_wrapper(payload: str = "{}", **kwargs):
+        return await call_ultimate(method_name, payload, **kwargs)
 
     tool_wrapper.__name__ = method_name
     tool_wrapper.__doc__ = description
@@ -374,8 +397,21 @@ PLACEHOLDER_METHODS = [
     "generate_uuid",
 ]
 
+def register_placeholder(name: str):
+    async def placeholder(payload: str = "{}", **kwargs):
+        params = _merge_params(payload, kwargs)
+        if not ultimate_tools:
+            return await call_ultimate("placeholder_tool", payload=params, name=name)
+        result = ultimate_tools.placeholder_tool(name)
+        return format_result(result)
+
+    placeholder.__name__ = name
+    placeholder.__doc__ = f"Fonctionnalité « {name} » (en cours d'implémentation)."
+    mcp.tool()(placeholder)
+
+
 for placeholder_name in PLACEHOLDER_METHODS:
-    if placeholder_name in [
+    if placeholder_name in {
         "analyze_charges_foncieres",
         "get_cash_flows",
         "get_valorisations",
@@ -387,21 +423,9 @@ for placeholder_name in PLACEHOLDER_METHODS:
         "risk_assessment",
         "stress_test",
         "covenant_compliance",
-    ]:
-        # already registered above with partial implementations
+    }:
         continue
-
-    def make_placeholder(name: str):
-        async def placeholder(**kwargs):
-            if not ultimate_tools:
-                return await call_ultimate(name, **kwargs)
-            return format_result(ultimate_tools.placeholder_tool(name))
-
-        placeholder.__name__ = name
-        placeholder.__doc__ = f"Fonctionnalité « {name} » (en cours d'implémentation)."
-        mcp.tool()(placeholder)
-
-    make_placeholder(placeholder_name)
+    register_placeholder(placeholder_name)
 
 # -----------------------------------------------------------------------------
 # ASGI App (FastMCP streamable HTTP → expose /mcp)
