@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, AliasChoices
 
 class Settings(BaseSettings):
     environment: str = Field(default="development")
@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     # LLMs
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
+    embedding_model: str = Field(
+        default="text-embedding-3-small",
+        validation_alias=AliasChoices("EMBEDDING_MODEL", "OPENAI_EMBED_MODEL"),
+    )
 
     # Database / Vector
     supabase_url: str | None = None

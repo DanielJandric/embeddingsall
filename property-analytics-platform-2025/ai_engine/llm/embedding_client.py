@@ -12,12 +12,13 @@ def _get_client() -> OpenAI:
         _client = OpenAI(api_key=settings.openai_api_key)
     return _client
 
-def embed_texts(texts: List[str], model: str = "text-embedding-3-small") -> List[List[float]]:
+def embed_texts(texts: List[str], model: Optional[str] = None) -> List[List[float]]:
     if not texts:
         return []
     client = _get_client()
     # OpenAI embeddings API supports batching
-    resp = client.embeddings.create(input=texts, model=model)
+    use_model = model or settings.embedding_model or "text-embedding-3-small"
+    resp = client.embeddings.create(input=texts, model=use_model)
     return [item.embedding for item in resp.data]
 
 
