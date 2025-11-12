@@ -125,7 +125,6 @@ WORKERS_CONFIG = {
 # Models Configuration - DERNIÈRES VERSIONS NOVEMBRE 2025
 MODELS = {
     'gpt4': 'gpt-4.1',  # Chat GPT-4.1 exactement
-    'claude': 'claude-sonnet-4-5-20250929',  # Claude Sonnet 4.5 (API 2025)
     'embedding': 'text-embedding-3-large',
     'embedding_small': 'text-embedding-3-small'
 }
@@ -589,16 +588,16 @@ class SemanticEnricher:
         """
         
         try:
-            if self.anthropic_client:
-                response = self.anthropic_client.messages.create(
-                    model=MODELS['claude'],  # Claude Sonnet 4.5
-                    messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-                    max_tokens=1500
-                )
-                raw_text, parsed = parse_claude_json(response)
-                if parsed is not None:
-                    return parsed
-                logger.error(f"Erreur Q&A: JSON invalide. Réponse brute: {raw_text[:500]}")
+            response = self.openai_client.chat.completions.create(
+                model=MODELS['gpt4'],
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                max_tokens=1500,
+            )
+            try:
+                return json.loads(response.choices[0].message.content)
+            except json.JSONDecodeError as exc:
+                logger.error(f"Erreur Q&A: JSON invalide ({exc}). Réponse brute: {response.choices[0].message.content[:500]}")
         except Exception as e:
             logger.error(f"Erreur Q&A: {e}")
         return {"qa_pairs": []}
@@ -1310,21 +1309,19 @@ class SubstanceGenerator:
         """
         
         try:
-            import anthropic
-            client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-            
-            response = client.messages.create(
-                model=MODELS['claude'],
-                messages=[{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-                max_tokens=3000
+            response = self.openai_client.chat.completions.create(
+                model=MODELS['gpt4'],
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                max_tokens=3000,
             )
-
-            raw_text, parsed = parse_claude_json(response)
-            if parsed is not None:
-                return parsed
-            logger.error(f"Erreur génération substance: JSON invalide. Réponse brute: {raw_text[:500]}")
-            return self._generate_fallback_insights(doc)
-            
+            try:
+                return json.loads(response.choices[0].message.content)
+            except json.JSONDecodeError as exc:
+                logger.error(
+                    f"Erreur génération substance: JSON invalide ({exc}). Réponse brute: {response.choices[0].message.content[:500]}"
+                )
+                return self._generate_fallback_insights(doc)
         except Exception as e:
             logger.error(f"Erreur génération substance: {e}")
             return self._generate_fallback_insights(doc)
