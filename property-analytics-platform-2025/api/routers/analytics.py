@@ -149,3 +149,38 @@ async def import_from_existing(limit: int = 100, offset: int = 0):
             imported += 1
     return {"imported_documents": imported}
 
+@router.get("/documents/ids")
+async def list_document_ids(limit: int = 1000, offset: int = 0):
+    from ...analytics_engine.core.db import get_conn
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id FROM property_documents ORDER BY id ASC LIMIT %s OFFSET %s;",
+            (max(1, limit), max(0, offset)),
+        )
+        ids = [row[0] for row in cur.fetchall()]
+    return {"ids": ids}
+
+@router.post("/reindex-doc/{doc_id}")
+async def reindex_document(doc_id: int):
+    """
+    Re-chunk & re-embed a single document by id.
+    """
+    from ...analytics_engine.core.db import get_conn
+    with get_conn() as conn:
+        cur = conn.cursor()
+        cur.execute("SELECT file_name, full_text FROM property_documents WHERE id = %s;", (doc_id,))
+        row = cur.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Document not found")
+        file_name, full_text = row
+        # Delete existing chunks
+        cur.execute("DELETE FROM property_chunks WHERE document_id = %s;", (doc_id,))
+        text = full_text or ""
+        chunks = split_text(text)
+        vectors = embed_texts(chunks) if chunks else []
+        n = 0
+        if chunks:
+            n = insert_chunks(doc_id, chunks, vectors)
+        return {"document_id": doc_id, "chunks": n}
+
