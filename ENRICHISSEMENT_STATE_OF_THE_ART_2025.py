@@ -27,6 +27,9 @@ from sklearn.decomposition import LatentDirichletAllocation
 import spacy
 from transformers import pipeline
 import pandas as pd
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configuration du logging
 logging.basicConfig(
