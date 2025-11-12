@@ -1617,55 +1617,28 @@ class EnrichmentSaver:
     def save_enrichment(self, enrichment: DocumentEnrichment) -> bool:
         """Sauvegarder un enrichissement"""
         try:
-            # Préparer les données pour Supabase
-            update_data = {
-                # Métadonnées Suisse
-                'canton': enrichment.metadata_swiss.get('canton'),
-                'commune': enrichment.metadata_swiss.get('commune'),
-                'code_postal': enrichment.metadata_swiss.get('code_postal'),
-                'adresse_principale': enrichment.metadata_swiss.get('adresse'),
-                
-                # Montants
-                'montant_principal': enrichment.metadata_swiss.get('montant_principal'),
-                'devise': 'CHF' if enrichment.metadata_swiss.get('montant_principal') else None,
-                
-                # Entités
-                'bailleur': enrichment.metadata_swiss.get('bailleur'),
-                'locataire': enrichment.metadata_swiss.get('locataire'),
-                'proprietaire': enrichment.metadata_swiss.get('proprietaire'),
-                
-                # Propriété
-                'type_bien': enrichment.metadata_swiss.get('type_bien'),
-                'surface_m2': enrichment.metadata_swiss.get('surface_m2'),
-                'nombre_pieces': enrichment.metadata_swiss.get('nombre_pieces'),
-                'etage': enrichment.metadata_swiss.get('etage'),
-                
-                # Classification
-                'type_document': enrichment.document_type,
-                'categorie': enrichment.document_type,
+            # Préparer un payload JSON unique pour documents_full
+            metadata_payload = {
+                'enrichment_version': '2025.1',
+                'summary_short': enrichment.summary_short,
+                'summary_detailed': enrichment.summary_detailed,
+                'key_points': enrichment.key_points,
+                'qa_pairs': enrichment.questions_answers,
+                'risk_factors': enrichment.risk_factors,
+                'related_documents': enrichment.related_documents,
+                'swiss_metadata': enrichment.metadata_swiss,
                 'tags': enrichment.tags,
-                
-                # Scores
-                'importance_score': enrichment.importance_score,
-                'confidence_level': enrichment.confidence_score,
-                'data_quality_score': enrichment.quality_score,
-                
-                # Enrichissement complet en JSON
-                'metadata': {
-                    'enrichment_version': '2025.1',
-                    'summary_short': enrichment.summary_short,
-                    'summary_detailed': enrichment.summary_detailed,
-                    'key_points': enrichment.key_points,
-                    'qa_pairs': enrichment.questions_answers,
-                    'risk_factors': enrichment.risk_factors,
-                    'related_documents': enrichment.related_documents,
-                    'all_metadata': enrichment.metadata_swiss
-                }
+                'document_type': str(enrichment.document_type),
+                'scores': {
+                    'importance': enrichment.importance_score,
+                    'confidence': enrichment.confidence_score,
+                    'quality': enrichment.quality_score,
+                },
+                'generated_at': datetime.now().isoformat()
             }
-            
-            # Mettre à jour le document
+
             self.client.table('documents_full') \
-                .update(update_data) \
+                .update({'metadata': metadata_payload}) \
                 .eq('id', enrichment.document_id) \
                 .execute()
             
@@ -1691,6 +1664,10 @@ class EnrichmentSaver:
         except Exception as e:
             logger.error(f"Erreur sauvegarde: {e}")
             return False
+    
+    def flush(self) -> None:
+        """Compatibilité batching (sauvegarde immédiate)."""
+        return
     
     def save_knowledge_graph(self, graph: nx.DiGraph) -> bool:
         """Sauvegarder le graphe de connaissances"""
