@@ -27,9 +27,6 @@ from sklearn.decomposition import LatentDirichletAllocation
 import spacy
 from transformers import pipeline
 import pandas as pd
-from dotenv import load_dotenv
-
-load_dotenv()
 
 # Configuration du logging
 logging.basicConfig(
@@ -37,6 +34,12 @@ logging.basicConfig(
     format='%(asctime)s - [%(levelname)s] %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    logger.warning("python-dotenv non installé ; les variables seront lues directement depuis l'environnement.")
 
 # ================== CONFIGURATION ==================
 
