@@ -4,6 +4,7 @@ import json
 import os
 import logging
 from pathlib import Path
+from typing import Any, Dict
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -17,6 +18,7 @@ from src.supabase_client import SupabaseUploader
 from src.embeddings import EmbeddingGenerator
 from src.supabase_client_v2 import SupabaseUploaderV2
 from src.azure_ocr import AzureOCRProcessor
+from src.ultimate_tools import UltimateTools
 
 # ASGI / HTTP
 from starlette.applications import Starlette
@@ -60,6 +62,13 @@ try:
 except Exception as e:
     log.warning(f"⚠️ Azure OCR indisponible: {e}")
     ocr = None
+
+try:
+    ultimate_tools = UltimateTools()
+    log.info("✅ Ultimate tools initialisés")
+except Exception as e:
+    log.warning(f"⚠️ Ultimate tools indisponibles: {e}")
+    ultimate_tools = None
 
 # -----------------------------------------------------------------------------
 # MCP Server (FastMCP)
@@ -206,6 +215,193 @@ def list_files(directory: str, pattern: str = "*", recursive: bool = False) -> s
         except Exception:
             out.append(f"📄 {rel}")
     return "\n".join(out)
+
+# -----------------------------------------------------------------------------
+# Ultimate due diligence tools (dynamic registration)
+# -----------------------------------------------------------------------------
+
+def format_result(result: Dict[str, Any]) -> str:
+    return json.dumps(result, ensure_ascii=False, indent=2)
+
+
+async def call_ultimate(method_name: str, **kwargs) -> str:
+    if not ultimate_tools:
+        return format_result(
+            {
+                "success": False,
+                "data": None,
+                "metadata": {
+                    "execution_time_ms": 0,
+                    "cached": False,
+                    "data_sources": [],
+                    "count": 0,
+                    "query_cost": 0,
+                    "warnings": ["Ultimate tools non initialisés sur le serveur."],
+                },
+                "error": {"code": "not_initialized", "message": "Ultimate tools indisponibles.", "details": {}},
+            }
+        )
+    result = await asyncio.to_thread(ultimate_tools.run_sync, method_name, **kwargs)
+    return format_result(result)
+
+
+def register_tool(method_name: str, description: str):
+    async def tool_wrapper(**kwargs):
+        return await call_ultimate(method_name, **kwargs)
+
+    tool_wrapper.__name__ = method_name
+    tool_wrapper.__doc__ = description
+    mcp.tool()(tool_wrapper)
+
+
+# Category 1 – registres fonciers & états locatifs
+register_tool(
+    "get_registre_foncier",
+    "Récupère les informations de registre foncier (parcelle, commune, adresse).",
+)
+register_tool(
+    "search_servitudes",
+    "Recherche des servitudes par type, commune et impact sur la valeur.",
+)
+register_tool(
+    "analyze_charges_foncieres",
+    "Analyse les charges foncières pour une parcelle (gages, servitudes).",
+)
+register_tool(
+    "get_etat_locatif_complet",
+    "Retourne l'état locatif complet avec KPI et ratios calculés.",
+)
+register_tool(
+    "analyze_loyers_marche",
+    "Compare les loyers à la moyenne de marché dans le voisinage.",
+)
+register_tool(
+    "detect_anomalies_locatives",
+    "Détecte les anomalies locatives (loyers sous marché, vacance élevée).",
+)
+register_tool(
+    "get_echeancier_baux",
+    "Échéancier des fins de bail pour un immeuble (si disponible).",
+)
+
+# Category 1.3 & 2
+register_tool("get_cash_flows", "Récupère ou projette les flux de trésorerie d'un immeuble.")
+register_tool("get_valorisations", "Valorisations (DCF, capitalisation, comparables) pour un immeuble.")
+register_tool("get_charges_exploitation", "Analyse détaillée des charges d'exploitation d'un immeuble.")
+
+register_tool("query_table", "Requête flexible sur une table Supabase avec filtres et tri.")
+register_tool("execute_raw_sql", "Exécute une requête SQL brute (lecture seule par défaut).")
+register_tool("bulk_update", "Met à jour en masse des enregistrements dans une table.")
+register_tool("aggregate_data", "Agrégations complexes avec group by / having.")
+register_tool("pivot_table", "Génère un tableau croisé dynamique à partir d'une table.")
+register_tool("time_series_analysis", "Analyse temporelle avec agrégations et taux de croissance.")
+
+# Category 3 – Analyses financières
+register_tool("calculate_dcf", "Calcul de DCF complet avec scénarios et sensibilité.")
+register_tool("sensitivity_analysis", "Analyse de sensibilité multi-variables.")
+register_tool("calculate_rendements", "Calcule les rendements (brut, net, TRI, multiple).")
+register_tool("simulate_scenarios", "Simulations de scénarios financiers (Monte Carlo).")
+
+# Category 3.2 – Risques
+register_tool("risk_assessment", "Évaluation des risques pour un immeuble (locataires, technique, marché).")
+register_tool("stress_test", "Stress tests financiers sur différents chocs.")
+register_tool("covenant_compliance", "Vérifie la conformité aux covenants bancaires.")
+
+# Remaining categories – placeholders via placeholder_tool
+PLACEHOLDER_METHODS = [
+    "analyze_charges_foncieres",
+    "get_cash_flows",
+    "get_valorisations",
+    "get_charges_exploitation",
+    "calculate_dcf",
+    "sensitivity_analysis",
+    "calculate_rendements",
+    "simulate_scenarios",
+    "risk_assessment",
+    "stress_test",
+    "covenant_compliance",
+    "find_comparables",
+    "benchmark_market",
+    "market_trends",
+    "zone_analysis",
+    "score_immeuble",
+    "classify_assets",
+    "geospatial_query",
+    "proximity_analysis",
+    "heatmap_data",
+    "extract_document_data",
+    "document_similarity",
+    "batch_document_analysis",
+    "document_qa",
+    "cross_document_validation",
+    "predict_loyer_marche",
+    "predict_valorisation",
+    "predict_vacance_risk",
+    "detect_opportunities",
+    "churn_analysis",
+    "generate_due_diligence_report",
+    "generate_investment_memo",
+    "export_to_excel",
+    "generate_presentation",
+    "create_dashboard_data",
+    "create_alert",
+    "schedule_analysis",
+    "bulk_valuation_update",
+    "data_pipeline",
+    "fetch_cadastre_data",
+    "fetch_market_data",
+    "geocode_address",
+    "fetch_climate_risk",
+    "fetch_transport_score",
+    "validate_data_quality",
+    "detect_duplicates",
+    "audit_trail",
+    "data_lineage",
+    "find_related_entities",
+    "ownership_structure",
+    "tenant_network",
+    "cache_query_result",
+    "invalidate_cache",
+    "get_query_performance",
+    "get_database_schema",
+    "get_table_metadata",
+    "get_column_statistics",
+    "suggest_indexes",
+    "convert_units",
+    "calculate_distance",
+    "format_address",
+    "parse_swiss_date",
+    "generate_uuid",
+]
+
+for placeholder_name in PLACEHOLDER_METHODS:
+    if placeholder_name in [
+        "analyze_charges_foncieres",
+        "get_cash_flows",
+        "get_valorisations",
+        "get_charges_exploitation",
+        "calculate_dcf",
+        "sensitivity_analysis",
+        "calculate_rendements",
+        "simulate_scenarios",
+        "risk_assessment",
+        "stress_test",
+        "covenant_compliance",
+    ]:
+        # already registered above with partial implementations
+        continue
+
+    def make_placeholder(name: str):
+        async def placeholder(**kwargs):
+            if not ultimate_tools:
+                return await call_ultimate(name, **kwargs)
+            return format_result(ultimate_tools.placeholder_tool(name))
+
+        placeholder.__name__ = name
+        placeholder.__doc__ = f"Fonctionnalité « {name} » (en cours d'implémentation)."
+        mcp.tool()(placeholder)
+
+    make_placeholder(placeholder_name)
 
 # -----------------------------------------------------------------------------
 # ASGI App (FastMCP streamable HTTP → expose /mcp)
