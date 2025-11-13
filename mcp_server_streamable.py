@@ -19,6 +19,14 @@ from src.embeddings import EmbeddingGenerator
 from src.supabase_client_v2 import SupabaseUploaderV2
 from src.azure_ocr import AzureOCRProcessor
 from src.ultimate_tools import UltimateTools
+from mcp_real_estate import (
+    AgenticRAGRouter,
+    ValidationChain,
+    CorrectiveRAG,
+    SelfReflectiveAgent,
+    QueryPlanner,
+    ConfidenceScorer,
+)
 
 # ASGI / HTTP
 from starlette.applications import Starlette
@@ -320,6 +328,119 @@ register_tool(
     "find_vacancy_alerts",
     "Détecte les immeubles avec vacance ou risques élevés selon les seuils définis.",
 )
+
+# Agentic orchestrator -------------------------------------------------------
+
+
+async def _tool_runner(method_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
+    if not ultimate_tools:
+        raise RuntimeError("Ultimate tools non initialisés.")
+    return await asyncio.to_thread(ultimate_tools.run_sync, method_name, **params)
+
+
+def _serialize_validation(validation) -> Dict[str, Any]:
+    return {
+        "passed": validation.passed,
+        "confidence": validation.confidence,
+        "checks": [
+            {
+                "name": check.name,
+                "passed": check.passed,
+                "details": check.details,
+                "severity": check.severity,
+                "requires_requery": check.requires_requery,
+                "score": check.score,
+            }
+            for check in validation.checks
+        ],
+        "contradictions": validation.contradictions,
+        "requires_requery": validation.requires_requery,
+        "suggested_corrections": validation.suggested_corrections,
+        "db_doc_alignment_score": validation.db_doc_alignment_score,
+        "numerical_coherence_score": validation.numerical_coherence_score,
+    }
+
+
+@register_tool(
+    "agentic_query",
+    "Agentic RAG avec validation, correction et boucle réflexive.",
+)
+async def agentic_query(payload: str = "{}", **kwargs) -> str:
+    params = _merge_params(payload, kwargs)
+    query = params.get("query")
+    if not query:
+        return format_result(
+            {
+                "success": False,
+                "data": None,
+                "metadata": {"warnings": ["Paramètre 'query' obligatoire."]},
+                "error": {"code": "invalid_parameters", "message": "query manquant."},
+            }
+        )
+
+    confidence_threshold = float(params.get("confidence_threshold", 0.75))
+    max_iterations = int(params.get("max_iterations", 3))
+    enable_reflection = bool(params.get("enable_reflection", True))
+
+    try:
+        router = AgenticRAGRouter()
+        planner = QueryPlanner()
+        plan = await router.route_query(query, {"intent": params.get("intent")})
+
+        crag = CorrectiveRAG(
+            tool_runner=_tool_runner,
+            validator=ValidationChain(),
+            scorer=ConfidenceScorer(),
+            planner=planner,
+        )
+
+        result = await crag.execute_with_correction(plan, max_iterations=max_iterations)
+
+        if enable_reflection and result.confidence < confidence_threshold:
+            reflector = SelfReflectiveAgent()
+            reflection = reflector.reflect_on_answer(query, result.data, result.sources)
+            if reflection.should_continue:
+                new_plan = await router.replan_from_reflection(plan, reflection)
+                result = await crag.execute_with_correction(new_plan, max_iterations=1)
+
+        validation_payload = _serialize_validation(result.validation)
+
+        return format_result(
+            {
+                "success": result.validation.passed,
+                "data": {
+                    "answer": result.data,
+                    "confidence": result.confidence,
+                    "sources": result.sources,
+                    "iterations": result.iterations,
+                    "warnings": result.warnings,
+                    "corrections_applied": result.corrections_applied,
+                    "confidence_breakdown": result.confidence_score.factors,
+                    "confidence_flags": result.confidence_score.flags,
+                    "validation": validation_payload,
+                },
+                "metadata": {
+                    "query": query,
+                    "plan_metadata": plan.metadata,
+                },
+                "error": None
+                if result.validation.passed
+                else {
+                    "code": "validation_failed",
+                    "message": "Certaines vérifications n'ont pas été validées.",
+                    "details": validation_payload,
+                },
+            }
+        )
+    except Exception as exc:
+        return format_result(
+            {
+                "success": False,
+                "data": None,
+                "metadata": {"warnings": ["Exception pendant l'agentic query."]},
+                "error": {"code": "agentic_error", "message": str(exc)},
+            }
+        )
 
 # Category 1.3 & 2
 register_tool("get_cash_flows", "Récupère ou projette les flux de trésorerie d'un immeuble.")
