@@ -307,6 +307,20 @@ register_tool(
     "Échéancier des fins de bail pour un immeuble (si disponible).",
 )
 
+# Property & stakeholder insights
+register_tool(
+    "get_property_insight",
+    "Fiche complète d'un immeuble (insights agrégés, documents liés, état locatif).",
+)
+register_tool(
+    "get_stakeholder_profile",
+    "Profil d'un acteur (locataire/bailleur) avec ses propriétés et volumes.",
+)
+register_tool(
+    "find_vacancy_alerts",
+    "Détecte les immeubles avec vacance ou risques élevés selon les seuils définis.",
+)
+
 # Category 1.3 & 2
 register_tool("get_cash_flows", "Récupère ou projette les flux de trésorerie d'un immeuble.")
 register_tool("get_valorisations", "Valorisations (DCF, capitalisation, comparables) pour un immeuble.")

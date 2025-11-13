@@ -33,6 +33,8 @@ import math
 import os
 import statistics
 import time
+import unicodedata
+import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -169,6 +171,69 @@ class UltimateTools:
         if isinstance(data, (pd.Timestamp, pd.Timedelta)):
             return data.isoformat()
         return data
+
+    @staticmethod
+    def _normalize_text(value: Optional[str]) -> str:
+        if not value:
+            return ""
+        value = unicodedata.normalize("NFKD", value)
+        value = "".join(ch for ch in value if not unicodedata.combining(ch))
+        value = value.lower()
+        value = re.sub(r"[^\w\s-]", " ", value)
+        value = re.sub(r"\s+", " ", value).strip()
+        return value
+
+    @classmethod
+    def _slugify(cls, value: Optional[str]) -> str:
+        normalized = cls._normalize_text(value)
+        if not normalized:
+            return ""
+        return normalized.replace(" ", "-")
+
+    @staticmethod
+    def _jsonify_field(row: Dict[str, Any], field: str) -> None:
+        value = row.get(field)
+        if isinstance(value, str):
+            try:
+                row[field] = json.loads(value)
+            except Exception:
+                pass
+
+    def _fetch_related_documents(self, property_key: str, limit: int = 10) -> List[Dict[str, Any]]:
+        try:
+            query = (
+                self.client.table("documents_full")
+                .select("id, file_name, metadata, updated_at")
+                .eq("metadata->>property_key", property_key)
+                .limit(limit)
+            )
+            result = query.execute()
+            documents = result.data or []
+            for doc in documents:
+                meta = doc.get("metadata")
+                if isinstance(meta, str):
+                    try:
+                        doc["metadata"] = json.loads(meta)
+                    except Exception:
+                        doc["metadata"] = {}
+            return documents
+        except Exception:
+            return []
+
+    def _fetch_linked_etat(self, property_key: str) -> Optional[Dict[str, Any]]:
+        try:
+            query = (
+                self.client.table("etats_locatifs")
+                .select("*")
+                .eq("metadata->>property_key", property_key)
+                .limit(1)
+            )
+            result = query.execute()
+            if result.data:
+                return result.data[0]
+        except Exception:
+            pass
+        return None
 
     async def _run_async(self, func, *args, **kwargs):
         loop = asyncio.get_running_loop()
@@ -525,6 +590,225 @@ class UltimateTools:
                     }
                 )
         return self._response(True, data=anomalies, start_ms=start)
+
+    # ------------------- Property & stakeholder insights -----------------
+
+    def get_property_insight(self, **kwargs) -> Dict[str, Any]:
+        """
+        Récupère la fiche d'un immeuble agrégé par la phase 2.
+
+        Args (via kwargs):
+            property_key (Optional[str]): Identifiant unique (slug).
+            property_label (Optional[str]): Libellé lisible pour recherche approximative.
+            adresse (Optional[str]): Adresse brute pour retrouver l'immeuble.
+            include_documents (bool): Inclure la liste des documents associés (défaut True).
+            include_etat_locatif (bool): Ajouter l'état locatif lié (défaut True).
+        """
+        start = self._now_ms()
+        property_key = kwargs.get("property_key")
+        property_label = kwargs.get("property_label")
+        adresse = kwargs.get("adresse")
+        include_documents = kwargs.get("include_documents", True)
+        include_etat = kwargs.get("include_etat_locatif", True)
+
+        query = self.client.table("property_insights").select("*")
+        if property_key:
+            query = query.eq("property_key", property_key)
+        elif property_label:
+            query = query.ilike("property_label", f"%{property_label}%")
+        elif adresse:
+            slug = self._slugify(adresse)
+            if slug:
+                query = query.eq("property_key", slug)
+        else:
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "property_key, property_label ou adresse doit être fourni."),
+            )
+
+        try:
+            result = query.limit(1).execute()
+        except Exception as exc:
+            return self._response(False, data=None, start_ms=start, error=self._error("query_failed", str(exc)))
+
+        if not result.data:
+            hint = property_key or property_label or adresse
+            return self._response(
+                True,
+                data=None,
+                start_ms=start,
+                warnings=[f"Aucun insight disponible pour « {hint} »."],
+            )
+
+        record = result.data[0]
+        for field in ["addresses", "cantons", "communes", "postal_codes", "document_ids", "document_types", "tenants", "landlords", "organisations"]:
+            self._jsonify_field(record, field)
+
+        key = record.get("property_key")
+        complement = {}
+
+        if include_documents and key:
+            documents = self._fetch_related_documents(key, limit=10)
+            complement["documents"] = [
+                {
+                    "id": doc.get("id"),
+                    "file_name": doc.get("file_name"),
+                    "summary": (doc.get("metadata") or {}).get("summary_short"),
+                    "updated_at": doc.get("updated_at"),
+                }
+                for doc in documents
+            ]
+
+        if include_etat and key:
+            etat = self._fetch_linked_etat(key)
+            if etat:
+                complement["etat_locatif"] = {
+                    "immeuble_nom": etat.get("immeuble_nom"),
+                    "immeuble_adresse": etat.get("immeuble_adresse"),
+                    "loyer_annuel_total": etat.get("loyer_annuel_total"),
+                    "taux_occupation_surface": etat.get("taux_occupation_surface"),
+                    "taux_vacance_financier": etat.get("taux_vacance_financier"),
+                    "nb_unites_louees": etat.get("nb_unites_louees"),
+                    "nb_unites_vacantes": etat.get("nb_unites_vacantes"),
+                }
+
+        payload = {"property": record, **complement}
+        return self._response(True, data=payload, start_ms=start)
+
+    def get_stakeholder_profile(self, **kwargs) -> Dict[str, Any]:
+        """
+        Récupère la fiche d'un acteur (locataire/bailleur) agrégé.
+
+        Args (via kwargs):
+            name (str): Nom du stakeholder (obligatoire).
+            stakeholder_type (Optional[str]): "tenant" ou "landlord".
+            include_properties (bool): Joindre les insights immeuble (défaut True).
+        """
+        start = self._now_ms()
+        name = kwargs.get("name")
+        stakeholder_type = kwargs.get("stakeholder_type")
+        include_properties = kwargs.get("include_properties", True)
+
+        if not name:
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "name est obligatoire."),
+            )
+
+        query = self.client.table("stakeholder_insights").select("*")
+        query = query.ilike("stakeholder_name", f"%{name}%")
+        if stakeholder_type:
+            query = query.eq("stakeholder_type", stakeholder_type)
+
+        try:
+            result = query.limit(5).execute()
+        except Exception as exc:
+            return self._response(False, data=None, start_ms=start, error=self._error("query_failed", str(exc)))
+
+        rows = result.data or []
+        if not rows:
+            return self._response(
+                True,
+                data=[],
+                start_ms=start,
+                warnings=[f"Aucun stakeholder correspondant à « {name} »."],
+            )
+
+        for row in rows:
+            for field in ["properties", "document_ids"]:
+                self._jsonify_field(row, field)
+
+        payload = []
+        for row in rows:
+            entry = {"stakeholder": row}
+            if include_properties:
+                linked_props = []
+                properties = row.get("properties") or []
+                for prop_key in properties[:5]:
+                    if isinstance(prop_key, str):
+                        prop_resp = self.client.table("property_insights").select("property_key, property_label, cantons, communes").eq("property_key", prop_key).limit(1).execute()
+                        if prop_resp.data:
+                            detail = prop_resp.data[0]
+                            for field in ["cantons", "communes"]:
+                                self._jsonify_field(detail, field)
+                            linked_props.append(detail)
+                entry["linked_properties"] = linked_props
+            payload.append(entry)
+
+        return self._response(True, data=payload, start_ms=start)
+
+    def find_vacancy_alerts(self, **kwargs) -> Dict[str, Any]:
+        """
+        Identifie les immeubles avec un risque de vacance élevé.
+
+        Args (via kwargs):
+            canton (Optional[str]): Filtrer par canton.
+            commune (Optional[str]): Filtrer par commune.
+            seuil_vacance (float): Taux de vacance financier seuil (défaut 0.1 = 10%).
+            limit (int): Nombre max de résultats (défaut 25).
+        """
+        start = self._now_ms()
+        canton = kwargs.get("canton")
+        commune = kwargs.get("commune")
+        limit = int(kwargs.get("limit", 25))
+        try:
+            seuil_vacance = float(kwargs.get("seuil_vacance", 0.1))
+        except (TypeError, ValueError):
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "seuil_vacance doit être numérique."),
+            )
+
+        filters = {}
+        if canton:
+            filters["immeuble_canton"] = canton
+        if commune:
+            filters["immeuble_ville"] = commune
+
+        rows = self._query_table("etats_locatifs", filters=filters, limit=1000)
+        alerts: List[Dict[str, Any]] = []
+
+        for row in rows:
+            try:
+                taux_financier = row.get("taux_vacance_financier")
+                if taux_financier is None:
+                    vacantes = float(row.get("nb_unites_vacantes") or 0)
+                    total = vacantes + float(row.get("nb_unites_louees") or 0)
+                    taux_financier = vacantes / total if total else 0.0
+                taux_financier = float(taux_financier)
+            except (TypeError, ValueError):
+                continue
+
+            if taux_financier >= seuil_vacance:
+                alerts.append(
+                    {
+                        "immeuble_id": row.get("id"),
+                        "immeuble_nom": row.get("immeuble_nom"),
+                        "adresse": row.get("immeuble_adresse"),
+                        "ville": row.get("immeuble_ville"),
+                        "canton": row.get("immeuble_canton"),
+                        "taux_vacance_financier": taux_financier,
+                        "nb_unites_vacantes": row.get("nb_unites_vacantes"),
+                        "nb_unites_total": (row.get("nb_unites_vacantes") or 0) + (row.get("nb_unites_louees") or 0),
+                        "loyer_annuel_total": row.get("loyer_annuel_total"),
+                    }
+                )
+
+        alerts.sort(key=lambda item: item.get("taux_vacance_financier", 0), reverse=True)
+        if limit:
+            alerts = alerts[:limit]
+
+        warnings = []
+        if not alerts:
+            warnings.append("Aucune vacance significative trouvée avec les filtres fournis.")
+
+        return self._response(True, data=alerts, start_ms=start, warnings=warnings)
 
     def get_echeancier_baux(self, **kwargs) -> Dict[str, Any]:
         """
