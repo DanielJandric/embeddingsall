@@ -361,11 +361,9 @@ def _serialize_validation(validation) -> Dict[str, Any]:
     }
 
 
-register_tool(
-    "agentic_query",
-    "Agentic RAG avec validation, correction et boucle réflexive.",
-)
+mcp.tool()
 async def agentic_query(payload: str = "{}", **kwargs) -> str:
+    """Agentic RAG avec validation, correction et boucle réflexive."""
     params = _merge_params(payload, kwargs)
     query = params.get("query")
     if not query:
