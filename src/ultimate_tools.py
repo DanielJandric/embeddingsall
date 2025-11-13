@@ -87,6 +87,44 @@ class UltimateTools:
     """
 
     SUPPORTED_DATA_SOURCES = ["supabase"]
+    ADDRESS_MARKERS = [
+        " loyers",
+        "loyers",
+        "miete",
+        "beilagen",
+        "état",
+        "etat",
+        "annexe",
+        "annexes",
+        "periode",
+        "période",
+        "detail",
+        "détail",
+        "objet",
+        "locataire",
+        "gestionnaire",
+        "verwalter",
+        "payable",
+        "en faveur",
+        "reference",
+        "référence",
+        "procimmo",
+        "domicim",
+        "tableau",
+    ]
+    COMMUNE_STOPWORDS = {
+        "loyers",
+        "annexes",
+        "miete",
+        "état",
+        "etat",
+        "detail",
+        "détail",
+        "tableau",
+        "resume",
+        "résumé",
+        "domicim",
+    }
 
     def __init__(self) -> None:
         url = os.getenv("SUPABASE_URL")
@@ -188,7 +226,19 @@ class UltimateTools:
         normalized = cls._normalize_text(value)
         if not normalized:
             return ""
-        return normalized.replace(" ", "-")
+        normalized = unicodedata.normalize("NFKD", normalized)
+        normalized = "".join(ch for ch in normalized if not unicodedata.combining(ch))
+        normalized = normalized.lower()
+        normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
+        tokens = [tok for tok in normalized.split("-") if tok]
+        deduped: List[str] = []
+        for tok in tokens:
+            if deduped and tok == deduped[-1]:
+                continue
+            deduped.append(tok)
+        if len(deduped) > 8:
+            deduped = deduped[:8]
+        return "-".join(deduped)
 
     @staticmethod
     def _jsonify_field(row: Dict[str, Any], field: str) -> None:
@@ -198,6 +248,50 @@ class UltimateTools:
                 row[field] = json.loads(value)
             except Exception:
                 pass
+
+    def _clean_fragment(self, value: Optional[str]) -> str:
+        text = self._normalize_text(value)
+        lowered = text.lower()
+        for marker in self.ADDRESS_MARKERS:
+            idx = lowered.find(marker)
+            if idx != -1:
+                text = text[:idx]
+                lowered = text[:idx].lower()
+        text = re.sub(r"\b(n°|no|numero|numéro)\b.*", "", text, flags=re.IGNORECASE)
+        return text.strip()
+
+    def _clean_commune(self, value: Optional[str]) -> str:
+        text = self._normalize_text(value)
+        lowered = text.lower()
+        for marker in self.COMMUNE_STOPWORDS:
+            idx = lowered.find(marker)
+            if idx > 0:
+                text = text[:idx]
+                break
+        return text.strip()
+
+    def _canonical_property_signature(self, row: Dict[str, Any]) -> Tuple[str, str]:
+        address = self._clean_fragment(
+            row.get("immeuble_adresse")
+            or row.get("address")
+            or row.get("file_path")
+        )
+        ville = self._clean_commune(row.get("immeuble_ville"))
+        canton = self._clean_fragment(row.get("immeuble_canton"))
+        nom = self._clean_fragment(row.get("immeuble_nom"))
+        reference = self._clean_fragment(row.get("immeuble_ref"))
+
+        slug_source = " ".join(
+            part for part in [nom, address, ville, canton, reference] if part
+        )
+        slug = self._slugify(slug_source)
+        if not slug:
+            fallback = row.get("id")
+            slug = f"etat-{fallback}" if fallback is not None else ""
+
+        label_parts = [part for part in [nom, address, ville] if part]
+        label = " | ".join(label_parts) or slug or "immeuble-inconnu"
+        return slug, label
 
     def _fetch_related_documents(self, property_key: str, limit: int = 10) -> List[Dict[str, Any]]:
         try:
@@ -772,7 +866,7 @@ class UltimateTools:
             filters["immeuble_ville"] = commune
 
         rows = self._query_table("etats_locatifs", filters=filters, limit=1000)
-        alerts: List[Dict[str, Any]] = []
+        aggregated: Dict[str, Dict[str, Any]] = {}
 
         for row in rows:
             try:
@@ -785,21 +879,62 @@ class UltimateTools:
             except (TypeError, ValueError):
                 continue
 
-            if taux_financier >= seuil_vacance:
-                alerts.append(
-                    {
-                        "immeuble_id": row.get("id"),
-                        "immeuble_nom": row.get("immeuble_nom"),
-                        "adresse": row.get("immeuble_adresse"),
-                        "ville": row.get("immeuble_ville"),
-                        "canton": row.get("immeuble_canton"),
-                        "taux_vacance_financier": taux_financier,
-                        "nb_unites_vacantes": row.get("nb_unites_vacantes"),
-                        "nb_unites_total": (row.get("nb_unites_vacantes") or 0) + (row.get("nb_unites_louees") or 0),
-                        "loyer_annuel_total": row.get("loyer_annuel_total"),
-                    }
-                )
+            if taux_financier < seuil_vacance:
+                continue
 
+            slug, label = self._canonical_property_signature(row)
+            if not slug:
+                slug = f"etat-{row.get('id')}"
+
+            entry = aggregated.setdefault(
+                slug,
+                {
+                    "property_key": slug,
+                    "property_label": label,
+                    "ville": self._clean_commune(row.get("immeuble_ville")) or row.get("immeuble_ville"),
+                    "canton": self._clean_fragment(row.get("immeuble_canton")) or row.get("immeuble_canton"),
+                    "source_ids": [],
+                    "max_vacance": 0.0,
+                    "max_loyer": 0.0,
+                    "max_vacantes": 0.0,
+                    "max_total_units": 0.0,
+                },
+            )
+
+            entry["source_ids"].append(row.get("id"))
+            entry["max_vacance"] = max(entry["max_vacance"], taux_financier)
+            try:
+                loyer = float(row.get("loyer_annuel_total") or 0)
+            except (TypeError, ValueError):
+                loyer = 0.0
+            entry["max_loyer"] = max(entry["max_loyer"], loyer)
+
+            try:
+                vacantes = float(row.get("nb_unites_vacantes") or 0)
+            except (TypeError, ValueError):
+                vacantes = 0.0
+            try:
+                louees = float(row.get("nb_unites_louees") or 0)
+            except (TypeError, ValueError):
+                louees = 0.0
+            entry["max_vacantes"] = max(entry["max_vacantes"], vacantes)
+            entry["max_total_units"] = max(entry["max_total_units"], vacantes + louees)
+
+        alerts = [
+            {
+                "property_key": data["property_key"],
+                "property_label": data["property_label"],
+                "ville": data["ville"],
+                "canton": data["canton"],
+                "taux_vacance_financier": data["max_vacance"],
+                "loyer_annuel_total_max": data["max_loyer"],
+                "nb_unites_vacantes_max": data["max_vacantes"],
+                "nb_unites_total_max": data["max_total_units"],
+                "source_count": len(data["source_ids"]),
+                "source_ids": data["source_ids"],
+            }
+            for data in aggregated.values()
+        ]
         alerts.sort(key=lambda item: item.get("taux_vacance_financier", 0), reverse=True)
         if limit:
             alerts = alerts[:limit]
