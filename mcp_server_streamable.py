@@ -19,7 +19,7 @@ from src.embeddings import EmbeddingGenerator
 from src.supabase_client_v2 import SupabaseUploaderV2
 from src.azure_ocr import AzureOCRProcessor
 from src.ultimate_tools import UltimateTools
-from mcp_real_estate import (
+from src.mcp_real_estate import (
     AgenticRAGRouter,
     ValidationChain,
     CorrectiveRAG,
