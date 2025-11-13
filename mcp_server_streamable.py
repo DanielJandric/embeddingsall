@@ -361,7 +361,7 @@ def _serialize_validation(validation) -> Dict[str, Any]:
     }
 
 
-@register_tool(
+register_tool(
     "agentic_query",
     "Agentic RAG avec validation, correction et boucle réflexive.",
 )
