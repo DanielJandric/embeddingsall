@@ -154,6 +154,112 @@ class StructuralCompletenessRule(ValidationRule):
         )
 
 
+class DocumentPropertyAlignmentRule(ValidationRule):
+    name = "document-property-alignment"
+
+    async def run(
+        self,
+        response: Dict[str, Any],
+        sources: List[str],
+        query: str,
+        context: Optional[ExecutionContext] = None,
+    ) -> ValidationCheckResult:
+        if not context:
+            return ValidationCheckResult(
+                name=self.name,
+                passed=True,
+                details="Pas de contexte pour vérifier l'alignement documents/propriétés.",
+                score=0.7,
+            )
+
+        documents = context.memory.get("documents_lookup", {})
+        properties = context.memory.get("property_lookup", {})
+        documents_data = documents.get("data")
+        properties_data = properties.get("data")
+
+        def _count(payload: Any) -> int:
+            if isinstance(payload, dict) and "data" in payload:
+                data = payload.get("data")
+                if isinstance(data, list):
+                    return len(data)
+            if isinstance(payload, list):
+                return len(payload)
+            return 0
+
+        doc_count = _count(documents_data)
+        prop_count = _count(properties_data)
+
+        if doc_count == 0 and prop_count == 0:
+            return ValidationCheckResult(
+                name=self.name,
+                passed=False,
+                severity="warning",
+                details="Aucun document ou propriété trouvé pour la recherche.",
+                requires_requery=True,
+                score=0.2,
+            )
+
+        if doc_count and prop_count and abs(doc_count - prop_count) > max(3, prop_count * 0.5):
+            return ValidationCheckResult(
+                name=self.name,
+                passed=False,
+                severity="warning",
+                details=f"Décalage important entre documents ({doc_count}) et propriétés ({prop_count}).",
+                requires_requery=False,
+                score=0.4,
+            )
+
+        return ValidationCheckResult(
+            name=self.name,
+            passed=True,
+            details=f"Alignement documents/propriétés cohérent (docs={doc_count}, props={prop_count}).",
+            score=0.9,
+        )
+
+
+class FinancialConsistencyRule(ValidationRule):
+    name = "financial-consistency"
+
+    async def run(
+        self,
+        response: Dict[str, Any],
+        sources: List[str],
+        query: str,
+        context: Optional[ExecutionContext] = None,
+    ) -> ValidationCheckResult:
+        details = response.get("details") or {}
+        financials = details.get("financials") if isinstance(details, dict) else None
+        if not financials:
+            return ValidationCheckResult(
+                name=self.name,
+                passed=True,
+                details="Pas de données financières à vérifier.",
+                score=0.75,
+            )
+
+        total = 0.0
+        for item in financials:
+            if isinstance(item, dict):
+                rent = item.get("rent_total_chf")
+                if isinstance(rent, (int, float)):
+                    total += rent
+        if total <= 0:
+            return ValidationCheckResult(
+                name=self.name,
+                passed=False,
+                severity="warning",
+                details="Total des loyers calculés nul ou négatif.",
+                requires_requery=False,
+                score=0.3,
+            )
+        return ValidationCheckResult(
+            name=self.name,
+            passed=True,
+            details=f"Montant total loyers évalué à {total:.2f} CHF.",
+            score=0.85,
+        )
+
+
 class ValidationChain:
     """
     Aggregates validation rules and produces a global verdict.
@@ -168,6 +274,8 @@ class ValidationChain:
             NumericalCoherenceRule(),
             TemporalConsistencyRule(),
             StructuralCompletenessRule(),
+            DocumentPropertyAlignmentRule(),
+            FinancialConsistencyRule(),
         ]
 
     async def validate_response(

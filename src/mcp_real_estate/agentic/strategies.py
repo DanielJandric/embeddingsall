@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import re
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from .types import ExecutionContext, ExecutionPlan, ExecutionStep
@@ -30,7 +31,10 @@ def _make_tool_step(
     return ExecutionStep(name=name, func=runner, description=description)
 
 
-def _make_aggregate_step(name: str, aggregator: Callable[[ExecutionContext], Dict[str, Any]]) -> ExecutionStep:
+def _make_aggregate_step(
+    name: str,
+    aggregator: Callable[[ExecutionContext], Dict[str, Any]],
+) -> ExecutionStep:
     async def runner(ctx: ExecutionContext) -> Dict[str, Any]:
         return aggregator(ctx)
 
@@ -54,6 +58,30 @@ def _collect_sources(*payloads: Any) -> List[str]:
     return list(dict.fromkeys(src for src in sources if src))
 
 
+def _extract_data(entry: Dict[str, Any]) -> Any:
+    data = entry.get("data")
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except Exception:
+            return data
+    if isinstance(data, dict) and "data" in data:
+        return data.get("data")
+    return data
+
+
+def _extract_terms(query: str) -> Dict[str, str]:
+    lowered = query.lower()
+    tokens = re.findall(r"[a-zà-ÿ0-9']+", lowered)
+    term = " ".join(tokens[:4]) if tokens else lowered
+    candidate_communes = re.findall(r"\b([A-Z][a-zÀ-ÿ\-']{2,})\b", query)
+    commune = candidate_communes[-1] if candidate_communes else ""
+    return {
+        "term": term.strip(),
+        "commune": commune.strip(),
+    }
+
+
 class BaseStrategy:
     name: str = "base"
 
@@ -73,41 +101,30 @@ class FactualStrategy(BaseStrategy):
     name = "factual"
 
     def build_plan(self, query: str, context: Dict[str, Any]) -> ExecutionPlan:
-        lowered = query.lower()
+        terms = _extract_terms(query)
 
         def documents_params(_: ExecutionContext) -> Dict[str, Any]:
             return {
                 "table_name": "documents_full",
-                "filters": {"file_name": f"%{lowered}%"},
+                "filters": {"file_name": f"%{terms['term']}%"},
                 "limit": 20,
             }
 
         def properties_params(_: ExecutionContext) -> Dict[str, Any]:
             return {
                 "table_name": "property_insights",
-                "filters": {"property_key": f"%{lowered.replace(' ', '-') }%"},
-                "limit": 10,
+                "filters": {"property_key": f"%{terms['term'].replace(' ', '-') }%"},
+                "limit": 15,
             }
 
-        def extract(entry: Dict[str, Any]) -> Any:
-            data = entry.get("data")
-            if isinstance(data, dict) and "data" in data:
-                return data.get("data")
-            return data
-
         def aggregate(ctx: ExecutionContext) -> Dict[str, Any]:
-            documents_entry = ctx.memory.get("documents_lookup", {})
-            properties_entry = ctx.memory.get("property_lookup", {})
-            documents = extract(documents_entry) or []
-            properties = extract(properties_entry) or []
+            documents = _extract_data(ctx.memory.get("documents_lookup", {})) or []
+            properties = _extract_data(ctx.memory.get("property_lookup", {})) or []
             sources = _collect_sources(documents, properties)
             summary = f"Recherche factuelle pour '{query}' avec {len(properties)} propriétés et {len(documents)} documents."
             return {
                 "summary": summary,
-                "details": {
-                    "documents": documents,
-                    "properties": properties,
-                },
+                "details": {"documents": documents, "properties": properties},
                 "metrics": [len(properties), len(documents)],
                 "sources": sources,
                 "source_timestamps": [
@@ -122,9 +139,7 @@ class FactualStrategy(BaseStrategy):
                 _make_tool_step("documents_lookup", "query_table", documents_params, "Recherche de documents bruts"),
                 _make_tool_step("property_lookup", "query_table", properties_params, "Recherche dans property_insights"),
             ],
-            [
-                _make_aggregate_step("factual_summary", aggregate),
-            ],
+            [_make_aggregate_step("factual_summary", aggregate)],
         ]
 
         return ExecutionPlan(
@@ -140,28 +155,24 @@ class FinancialStrategy(BaseStrategy):
     name = "financial"
 
     def build_plan(self, query: str, context: Dict[str, Any]) -> ExecutionPlan:
-        term = query.lower()
+        terms = _extract_terms(query)
 
         def cashflow_params(_: ExecutionContext) -> Dict[str, Any]:
             return {
                 "table_name": "property_insights",
-                "filters": {"property_key": f"%{term.replace(' ', '-') }%"},
+                "filters": {"property_key": f"%{terms['term'].replace(' ', '-') }%"},
                 "select": "property_key, rent_total_chf, rent_principal_chf, document_ids",
-                "limit": 10,
+                "limit": 20,
             }
 
         def aggregate(ctx: ExecutionContext) -> Dict[str, Any]:
-            entry = ctx.memory.get("financial_overview", {})
-            data = entry.get("data")
-            if isinstance(data, dict) and "data" in data:
-                overview = data["data"] or []
-            else:
-                overview = data or []
+            overview = _extract_data(ctx.memory.get("financial_overview", {})) or []
             metrics = []
             for item in overview:
                 if isinstance(item, dict):
-                    rent_total = item.get("rent_total_chf") or 0
-                    metrics.append(float(rent_total))
+                    rent_total = item.get("rent_total_chf")
+                    if isinstance(rent_total, (int, float)):
+                        metrics.append(float(rent_total))
             sources = _collect_sources(overview)
             summary = f"Analyse financière pour '{query}'."
             return {
@@ -196,31 +207,27 @@ class ComparativeStrategy(BaseStrategy):
     name = "comparative"
 
     def build_plan(self, query: str, context: Dict[str, Any]) -> ExecutionPlan:
-        target_city = query.lower()
+        terms = _extract_terms(query)
 
         def market_params(_: ExecutionContext) -> Dict[str, Any]:
+            filters: Dict[str, Any] = {}
+            if terms.get("commune"):
+                filters["immeuble_ville"] = terms["commune"]
+            filters.setdefault("file_name", f"%{terms['term']}%")
             return {
                 "table_name": "etats_locatifs",
-                "filters": {"immeuble_ville": target_city.title()},
-                "limit": 25,
+                "filters": filters,
+                "limit": 30,
             }
 
         def aggregate(ctx: ExecutionContext) -> Dict[str, Any]:
-            entry = ctx.memory.get("market_snapshot", {})
-            data = entry.get("data")
-            if isinstance(data, dict) and "data" in data:
-                market = data["data"] or []
-            else:
-                market = data or []
-            avg_rent = 0.0
-            rents = []
-            for item in market:
-                if isinstance(item, dict):
-                    rent = item.get("loyer_annuel_total")
-                    if isinstance(rent, (int, float)):
-                        rents.append(float(rent))
-            if rents:
-                avg_rent = sum(rents) / len(rents)
+            market = _extract_data(ctx.memory.get("market_snapshot", {})) or []
+            rents = [
+                float(item.get("loyer_annuel_total"))
+                for item in market
+                if isinstance(item, dict) and isinstance(item.get("loyer_annuel_total"), (int, float))
+            ]
+            avg_rent = sum(rents) / len(rents) if rents else 0.0
             sources = _collect_sources(market)
             summary = f"Comparaison de marché pour '{query}'."
             return {
@@ -255,22 +262,19 @@ class RiskAssessmentStrategy(BaseStrategy):
     name = "risk"
 
     def build_plan(self, query: str, context: Dict[str, Any]) -> ExecutionPlan:
-        lowered = query.lower()
+        terms = _extract_terms(query)
 
         def risk_params(_: ExecutionContext) -> Dict[str, Any]:
-            return {
-                "seuil_vacance": 0.1,
-                "limit": 20,
-                "commune": lowered.title(),
+            params = {
+                "seuil_vacance": float(context.get("seuil_vacance") or 0.1),
+                "limit": int(context.get("limit") or 25),
             }
+            if terms.get("commune"):
+                params["commune"] = terms["commune"]
+            return params
 
         def aggregate(ctx: ExecutionContext) -> Dict[str, Any]:
-            entry = ctx.memory.get("risk_alerts", {})
-            data = entry.get("data")
-            if isinstance(data, dict) and "data" in data:
-                alerts = data["data"] or []
-            else:
-                alerts = data or []
+            alerts = _extract_data(ctx.memory.get("risk_alerts", {})) or []
             sources = _collect_sources(alerts)
             summary = f"Analyse de risques pour '{query}'."
             return {
@@ -301,6 +305,112 @@ class RiskAssessmentStrategy(BaseStrategy):
         )
 
 
+class LandRegistryStrategy(BaseStrategy):
+    name = "land_registry"
+
+    def build_plan(self, query: str, context: Dict[str, Any]) -> ExecutionPlan:
+        terms = _extract_terms(query)
+
+        def registry_params(_: ExecutionContext) -> Dict[str, Any]:
+            filters: Dict[str, Any] = {"file_name": f"%{terms['term']}%"}
+            if terms.get("commune"):
+                filters["commune"] = terms["commune"]
+            return {
+                "table_name": "registres_fonciers",
+                "filters": filters,
+                "limit": 25,
+            }
+
+        def aggregate(ctx: ExecutionContext) -> Dict[str, Any]:
+            registres = _extract_data(ctx.memory.get("land_registry_lookup", {})) or []
+            servitudes = []
+            for entry in registres:
+                if isinstance(entry, dict):
+                    data = entry.get("servitudes")
+                    if isinstance(data, list):
+                        servitudes.extend(data)
+            sources = _collect_sources(registres)
+            summary = f"Analyse registre foncier pour '{query}'."
+            return {
+                "summary": summary,
+                "details": {"registres": registres, "servitudes": servitudes},
+                "metrics": [len(registres), len(servitudes)],
+                "sources": sources,
+            }
+
+        phases = [
+            [
+                _make_tool_step(
+                    "land_registry_lookup",
+                    "query_table",
+                    registry_params,
+                    "Recherche des registres fonciers pertinents",
+                )
+            ],
+            [_make_aggregate_step("land_registry_summary", aggregate)],
+        ]
+
+        return ExecutionPlan(
+            query=query,
+            phases=phases,
+            output_step="land_registry_summary",
+            validation_rules=self._default_validation_rules(),
+            confidence_threshold=0.75,
+        )
+
+
+class StakeholderStrategy(BaseStrategy):
+    name = "stakeholder"
+
+    def build_plan(self, query: str, context: Dict[str, Any]) -> ExecutionPlan:
+        terms = _extract_terms(query)
+
+        def stakeholders_params(_: ExecutionContext) -> Dict[str, Any]:
+            filters: Dict[str, Any] = {"stakeholder_name": f"%{terms['term']}%"}
+            return {
+                "table_name": "stakeholder_insights",
+                "filters": filters,
+                "limit": 25,
+            }
+
+        def aggregate(ctx: ExecutionContext) -> Dict[str, Any]:
+            stakeholders = _extract_data(ctx.memory.get("stakeholder_lookup", {})) or []
+            rents = [
+                float(item.get("rent_total_chf") or 0)
+                for item in stakeholders
+                if isinstance(item, dict)
+            ]
+            max_rent = max(rents) if rents else 0.0
+            sources = _collect_sources(stakeholders)
+            summary = f"Analyse stakeholders pour '{query}'."
+            return {
+                "summary": summary,
+                "details": {"stakeholders": stakeholders},
+                "metrics": [len(stakeholders), max_rent],
+                "sources": sources,
+            }
+
+        phases = [
+            [
+                _make_tool_step(
+                    "stakeholder_lookup",
+                    "query_table",
+                    stakeholders_params,
+                    "Recherche des stakeholders pertinents",
+                )
+            ],
+            [_make_aggregate_step("stakeholder_summary", aggregate)],
+        ]
+
+        return ExecutionPlan(
+            query=query,
+            phases=phases,
+            output_step="stakeholder_summary",
+            validation_rules=self._default_validation_rules(),
+            confidence_threshold=0.75,
+        )
+
+
 class SynthesisStrategy(BaseStrategy):
     name = "synthesis"
 
@@ -308,6 +418,8 @@ class SynthesisStrategy(BaseStrategy):
         factual = FactualStrategy().build_plan(query, context)
         financial = FinancialStrategy().build_plan(query, context)
         comparative = ComparativeStrategy().build_plan(query, context)
+        land = LandRegistryStrategy().build_plan(query, context)
+        stakeholder = StakeholderStrategy().build_plan(query, context)
 
         synthesis_step = _make_aggregate_step(
             "synthesis_summary",
@@ -317,17 +429,27 @@ class SynthesisStrategy(BaseStrategy):
                     "factual": ctx.memory.get("factual_summary"),
                     "financial": ctx.memory.get("financial_summary"),
                     "comparative": ctx.memory.get("comparative_summary"),
+                    "land_registry": ctx.memory.get("land_registry_summary"),
+                    "stakeholders": ctx.memory.get("stakeholder_summary"),
                 },
                 "metrics": [],
                 "sources": _collect_sources(
                     ctx.memory.get("factual_summary"),
                     ctx.memory.get("financial_summary"),
                     ctx.memory.get("comparative_summary"),
+                    ctx.memory.get("land_registry_summary"),
+                    ctx.memory.get("stakeholder_summary"),
                 ),
             },
         )
 
-        phases = factual.phases[:-1] + financial.phases[:-1] + comparative.phases[:-1]
+        phases = (
+            factual.phases[:-1]
+            + financial.phases[:-1]
+            + comparative.phases[:-1]
+            + land.phases[:-1]
+            + stakeholder.phases[:-1]
+        )
         phases.append([synthesis_step])
 
         return ExecutionPlan(
@@ -335,7 +457,13 @@ class SynthesisStrategy(BaseStrategy):
             phases=phases,
             output_step="synthesis_summary",
             validation_rules=self._default_validation_rules(),
-            confidence_threshold=0.8,
+            confidence_threshold=max(
+                factual.confidence_threshold,
+                financial.confidence_threshold,
+                comparative.confidence_threshold,
+                land.confidence_threshold,
+                stakeholder.confidence_threshold,
+            ),
         )
 
 
@@ -344,6 +472,8 @@ STRATEGIES: Dict[str, BaseStrategy] = {
     "financial": FinancialStrategy(),
     "comparative": ComparativeStrategy(),
     "risk": RiskAssessmentStrategy(),
+    "land_registry": LandRegistryStrategy(),
+    "stakeholder": StakeholderStrategy(),
     "synthesis": SynthesisStrategy(),
 }
 

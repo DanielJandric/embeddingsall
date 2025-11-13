@@ -11,6 +11,8 @@ INTENT_KEYWORDS = {
     "financial": {"rendement", "finance", "cashflow", "tri", "dcf"},
     "risk": {"risque", "vacance", "covenant", "stress", "exposition"},
     "comparative": {"compar", "benchmark", "marché", "vs "},
+    "land_registry": {"registre", "servitude", "parcelle", "foncier"},
+    "stakeholder": {"stakeholder", "locataire", "bailleur", "tenant", "exposition"},
     "synthesis": {"rapport", "synthèse", "due diligence", "analyse complète"},
 }
 
@@ -36,6 +38,10 @@ class AgenticRAGRouter:
             return "financial"
         if re.search(r"\b(vacance|risque|stress)\b", lowered):
             return "risk"
+        if re.search(r"\b(registre|servitude|foncier|parcelle)\b", lowered):
+            return "land_registry"
+        if re.search(r"\b(locataire|tenant|bailleur|stakeholder)\b", lowered):
+            return "stakeholder"
         return "factual"
 
     async def route_query(self, query: str, context: Dict[str, str]) -> ExecutionPlan:
