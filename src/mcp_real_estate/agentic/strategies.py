@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-import re
 import json
+import re
+import unicodedata
 from typing import Any, Callable, Dict, List, Optional
 
 from .types import ExecutionContext, ExecutionPlan, ExecutionStep
@@ -70,15 +71,117 @@ def _extract_data(entry: Dict[str, Any]) -> Any:
     return data
 
 
-def _extract_terms(query: str) -> Dict[str, str]:
-    lowered = query.lower()
-    tokens = re.findall(r"[a-zà-ÿ0-9']+", lowered)
-    term = " ".join(tokens[:4]) if tokens else lowered
+STOPWORDS = {
+    "analyse",
+    "analysis",
+    "complete",
+    "complète",
+    "de",
+    "des",
+    "du",
+    "le",
+    "la",
+    "les",
+    "d",
+    "l",
+    "rapport",
+    "synthese",
+    "synthèse",
+    "immeuble",
+    "limmeuble",
+    "batiment",
+    "bâtiment",
+    "etude",
+    "étude",
+    "evaluation",
+    "évaluation",
+    "due",
+    "diligence",
+    "analyse",
+    "full",
+    "complet",
+    "complete",
+}
+
+
+def _normalize(text: str) -> str:
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.lower()
+    text = re.sub(r"[^\w\s-]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def _slugify(value: str, *, max_tokens: int = 8) -> str:
+    normalized = _normalize(value)
+    if not normalized:
+        return ""
+    normalized = normalized.replace(" ", "-")
+    normalized = re.sub(r"-+", "-", normalized)
+    tokens = [tok for tok in normalized.split("-") if tok]
+    if max_tokens and len(tokens) > max_tokens:
+        tokens = tokens[:max_tokens]
+    return "-".join(tokens)
+
+
+def _extract_terms(query: str) -> Dict[str, Any]:
+    normalized = _normalize(query)
+    raw_tokens = normalized.split()
+    keywords: List[str] = [tok for tok in raw_tokens if tok and tok not in STOPWORDS]
+    if not keywords and raw_tokens:
+        keywords = raw_tokens[:4]
+
+    numeric_pattern = re.compile(r"^\d{1,4}(?:-\d{1,4})?$")
+    numeric_tokens = [tok for tok in keywords if numeric_pattern.match(tok)]
+
     candidate_communes = re.findall(r"\b([A-Z][a-zÀ-ÿ\-']{2,})\b", query)
     commune = candidate_communes[-1] if candidate_communes else ""
+    if not commune:
+        for token in reversed(keywords):
+            if not numeric_pattern.match(token):
+                commune = token.replace("-", " ").title()
+                break
+
+    primary_keywords = keywords[-5:] if len(keywords) > 5 else keywords
+    if commune:
+        commune_slug = _slugify(commune)
+        if commune_slug and commune_slug not in primary_keywords:
+            primary_keywords.append(commune_slug)
+
+    # Deduplicate successive keywords while preserving order
+    deduped_keywords: List[str] = []
+    for token in primary_keywords:
+        if deduped_keywords and token == deduped_keywords[-1]:
+            continue
+        deduped_keywords.append(token)
+
+    file_pattern = ""
+    if deduped_keywords:
+        file_pattern = "%" + "%".join(deduped_keywords) + "%"
+
+    property_slug = _slugify(" ".join(deduped_keywords))
+    if not property_slug:
+        property_slug = _slugify(" ".join(keywords))
+
+    street_tokens: List[str] = []
+    street_number = ""
+    for tok in keywords:
+        if numeric_pattern.match(tok):
+            street_number = tok
+            break
+        street_tokens.append(tok)
+
+    street = " ".join(street_tokens[-3:])
+
     return {
-        "term": term.strip(),
+        "term": " ".join(deduped_keywords).strip() or normalized,
         "commune": commune.strip(),
+        "keywords": deduped_keywords,
+        "file_pattern": file_pattern or (f"%{normalized.replace(' ', '%')}%" if normalized else ""),
+        "property_slug": property_slug,
+        "street": street,
+        "street_number": street_number,
     }
 
 
@@ -104,16 +207,24 @@ class FactualStrategy(BaseStrategy):
         terms = _extract_terms(query)
 
         def documents_params(_: ExecutionContext) -> Dict[str, Any]:
+            filters: Dict[str, Any] = {}
+            pattern = terms.get("file_pattern")
+            if isinstance(pattern, str) and pattern.strip("%"):
+                filters["file_name"] = pattern
+            else:
+                filters["file_name"] = f"%{terms['term']}%"
             return {
                 "table_name": "documents_full",
-                "filters": {"file_name": f"%{terms['term']}%"},
+                "filters": filters,
                 "limit": 20,
             }
 
         def properties_params(_: ExecutionContext) -> Dict[str, Any]:
+            slug = terms.get("property_slug") or ""
+            pattern = f"%{slug}%" if slug else f"%{terms['term'].replace(' ', '-') }%"
             return {
                 "table_name": "property_insights",
-                "filters": {"property_key": f"%{terms['term'].replace(' ', '-') }%"},
+                "filters": {"property_key": pattern},
                 "limit": 15,
             }
 
@@ -158,9 +269,11 @@ class FinancialStrategy(BaseStrategy):
         terms = _extract_terms(query)
 
         def cashflow_params(_: ExecutionContext) -> Dict[str, Any]:
+            slug = terms.get("property_slug") or ""
+            pattern = f"%{slug}%" if slug else f"%{terms['term'].replace(' ', '-') }%"
             return {
                 "table_name": "property_insights",
-                "filters": {"property_key": f"%{terms['term'].replace(' ', '-') }%"},
+                "filters": {"property_key": pattern},
                 "select": "property_key, rent_total_chf, rent_principal_chf, document_ids",
                 "limit": 20,
             }
@@ -213,7 +326,11 @@ class ComparativeStrategy(BaseStrategy):
             filters: Dict[str, Any] = {}
             if terms.get("commune"):
                 filters["immeuble_ville"] = terms["commune"]
-            filters.setdefault("file_name", f"%{terms['term']}%")
+            pattern = terms.get("file_pattern")
+            if isinstance(pattern, str) and pattern.strip("%"):
+                filters["immeuble_nom"] = pattern
+            else:
+                filters["immeuble_nom"] = f"%{terms['term']}%"
             return {
                 "table_name": "etats_locatifs",
                 "filters": filters,
@@ -312,7 +429,12 @@ class LandRegistryStrategy(BaseStrategy):
         terms = _extract_terms(query)
 
         def registry_params(_: ExecutionContext) -> Dict[str, Any]:
-            filters: Dict[str, Any] = {"file_name": f"%{terms['term']}%"}
+            pattern = terms.get("file_pattern")
+            filters: Dict[str, Any] = {}
+            if isinstance(pattern, str) and pattern.strip("%"):
+                filters["file_name"] = pattern
+            else:
+                filters["file_name"] = f"%{terms['term']}%"
             if terms.get("commune"):
                 filters["commune"] = terms["commune"]
             return {
@@ -366,7 +488,12 @@ class StakeholderStrategy(BaseStrategy):
         terms = _extract_terms(query)
 
         def stakeholders_params(_: ExecutionContext) -> Dict[str, Any]:
-            filters: Dict[str, Any] = {"stakeholder_name": f"%{terms['term']}%"}
+            filters: Dict[str, Any] = {}
+            pattern = terms.get("file_pattern")
+            if isinstance(pattern, str) and pattern.strip("%"):
+                filters["stakeholder_name"] = pattern
+            else:
+                filters["stakeholder_name"] = f"%{terms['term']}%"
             return {
                 "table_name": "stakeholder_insights",
                 "filters": filters,
