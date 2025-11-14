@@ -698,6 +698,49 @@ class SynthesisStrategy(BaseStrategy):
                 )
                 payload = _parse_tool_payload(raw)
                 if payload:
+                    property_info = payload.get("property") or {}
+                    documents = payload.get("documents") or []
+                    if not documents:
+                        doc_ids = property_info.get("document_ids") or []
+                        doc_details = []
+                        for doc_id in doc_ids[:5]:
+                            try:
+                                raw_doc = await ctx.call_tool(
+                                    "query_table",
+                                    {
+                                        "table_name": "documents_full",
+                                        "filters": {"id": doc_id},
+                                        "limit": 1,
+                                    },
+                                )
+                                doc_payload = _parse_tool_payload(raw_doc)
+                                if isinstance(doc_payload, list) and doc_payload:
+                                    record = doc_payload[0]
+                                elif isinstance(doc_payload, dict):
+                                    record = doc_payload
+                                else:
+                                    record = None
+                                if isinstance(record, dict):
+                                    meta = record.get("metadata")
+                                    if isinstance(meta, str):
+                                        try:
+                                            record["metadata"] = json.loads(meta)
+                                        except Exception:
+                                            record["metadata"] = {}
+                                    doc_details.append(
+                                        {
+                                            "id": record.get("id"),
+                                            "file_name": record.get("file_name"),
+                                            "summary": (record.get("metadata") or {}).get(
+                                                "summary_short"
+                                            ),
+                                            "updated_at": record.get("updated_at"),
+                                        }
+                                    )
+                            except Exception:
+                                continue
+                        if doc_details:
+                            payload["documents"] = doc_details
                     details.append({"property_key": key, "payload": payload})
             ctx.memory["property_details"] = {"properties": details}
             return {"properties": details}
@@ -760,9 +803,7 @@ class SynthesisStrategy(BaseStrategy):
 
         synthesis_step = _make_aggregate_step(
             "synthesis_summary",
-            lambda ctx: {
-                "summary": _build_synthesis_summary(ctx, query),
-            },
+            lambda ctx: _build_synthesis_summary(ctx, query),
         )
 
         phases: List[List[ExecutionStep]] = []
