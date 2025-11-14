@@ -475,6 +475,7 @@ register_tool("execute_raw_sql", "Exécute une requête SQL brute (lecture seule
 register_tool("bulk_update", "Met à jour en masse des enregistrements dans une table.")
 register_tool("aggregate_data", "Agrégations complexes avec group by / having.")
 register_tool("pivot_table", "Génère un tableau croisé dynamique à partir d'une table.")
+register_tool("get_database_schema", "Inspecte la structure d'un schéma (tables, colonnes, indexes).")
 register_tool("time_series_analysis", "Analyse temporelle avec agrégations et taux de croissance.")
 
 # Category 3 – Analyses financières
@@ -544,7 +545,6 @@ PLACEHOLDER_METHODS = [
     "cache_query_result",
     "invalidate_cache",
     "get_query_performance",
-    "get_database_schema",
     "get_table_metadata",
     "get_column_statistics",
     "suggest_indexes",

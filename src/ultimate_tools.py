@@ -38,6 +38,13 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+try:  # Optional dependency for direct Postgres access
+    import psycopg
+    from psycopg.rows import dict_row
+except ImportError:  # pragma: no cover - handled gracefully at runtime
+    psycopg = None
+    dict_row = None
+
 import pandas as pd
 from supabase import create_client, Client
 
@@ -86,7 +93,7 @@ class UltimateTools:
     error so that the client can react accordingly.
     """
 
-    SUPPORTED_DATA_SOURCES = ["supabase"]
+    SUPPORTED_DATA_SOURCES = ["supabase", "postgres"]
     ADDRESS_MARKERS = [
         " loyers",
         "loyers",
@@ -132,6 +139,12 @@ class UltimateTools:
         if not url or not key:
             raise RuntimeError("Supabase credentials are missing in environment variables.")
         self.client: Client = create_client(url, key)
+        self.database_url: Optional[str] = (
+            os.getenv("DATABASE_URL")
+            or os.getenv("SUPABASE_DATABASE_URL")
+            or os.getenv("POSTGRES_URL")
+            or os.getenv("PG_DSN")
+        )
 
     # ------------------------------------------------------------------
     # Generic helpers
@@ -182,6 +195,25 @@ class UltimateTools:
             start_ms=start_ms,
             error=self._error("not_available", f"La fonctionnalité « {feature} » n'est pas encore disponible."),
         )
+
+    def _open_postgres(self, *, read_only: bool = True):
+        if psycopg is None:
+            raise RuntimeError(
+                "Le module psycopg n'est pas installé. Installez-le avec `pip install psycopg[binary]` pour activer "
+                "les outils SQL avancés."
+            )
+        if not self.database_url:
+            raise RuntimeError(
+                "DATABASE_URL (ou SUPABASE_DATABASE_URL) est manquant. Définissez la chaîne de connexion Postgres."
+            )
+        conn = psycopg.connect(self.database_url, row_factory=dict_row)
+        try:
+            conn.read_only = read_only
+        except AttributeError:
+            if read_only:
+                with conn.cursor() as cur:
+                    cur.execute("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY")
+        return conn
 
     def _query_table(self, table: str, *, filters: Optional[Dict[str, Any]] = None, limit: int = 1000) -> List[Dict[str, Any]]:
         query = self.client.table(table).select("*")
@@ -1086,20 +1118,225 @@ class UltimateTools:
         except Exception as exc:
             return self._response(False, data=None, start_ms=start, error=self._error("query_failed", str(exc)))
 
-    def execute_raw_sql(self, **kwargs) -> Dict[str, Any]:
+    def get_database_schema(self, **kwargs) -> Dict[str, Any]:
         """
-        Exécute une requête SQL brute (placeholder).
+        Retourne la structure d'un schéma Postgres (tables, colonnes, indexes).
 
         Args (via kwargs):
-            query (str): Requête SQL.
-            params (Optional[dict]): Paramètres.
-            read_only (bool): Lecture seule (défaut True).
+            schema (str): Schéma cible (défaut "public").
+            include_tables (bool): Inclure les tables (défaut True).
+            include_views (bool): Inclure les vues (défaut True).
+            tables (Optional[list[str]]): Filtre pour une liste de tables.
+            limit (Optional[int]): Limiter le nombre d'objets retournés.
 
         Returns:
-            Dict[str, Any]: Placeholder indiquant la non disponibilité.
+            Dict[str, Any]: Détail du schéma.
         """
         start = self._now_ms()
-        return self._not_available("execute_raw_sql", start)
+        schema_name = kwargs.get("schema", "public")
+        include_tables = kwargs.get("include_tables", True)
+        include_views = kwargs.get("include_views", True)
+        table_filter = kwargs.get("tables")
+        limit = kwargs.get("limit")
+        warnings: List[str] = []
+
+        if not include_tables and not include_views:
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error(
+                    "invalid_parameters",
+                    "Au moins l'un des paramètres include_tables / include_views doit être vrai.",
+                ),
+            )
+
+        try:
+            with self._open_postgres(read_only=True) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT table_name, table_type
+                        FROM information_schema.tables
+                        WHERE table_schema = %s
+                        ORDER BY table_name
+                        """,
+                        (schema_name,),
+                    )
+                    tables_data = cur.fetchall()
+
+                    if not include_tables:
+                        tables_data = [row for row in tables_data if row["table_type"] != "BASE TABLE"]
+                    if not include_views:
+                        tables_data = [row for row in tables_data if row["table_type"] != "VIEW"]
+                    if table_filter:
+                        wanted = {t.lower() for t in table_filter}
+                        tables_data = [row for row in tables_data if row["table_name"].lower() in wanted]
+                    if limit is not None:
+                        limit = int(limit)
+                        if len(tables_data) > limit:
+                            warnings.append(f"Résultat tronqué à {limit} objets (limit={limit}).")
+                            tables_data = tables_data[:limit]
+
+                    result: List[Dict[str, Any]] = []
+                    for table in tables_data:
+                        table_name = table["table_name"]
+                        table_type = table["table_type"]
+
+                        cur.execute(
+                            """
+                            SELECT
+                                column_name,
+                                data_type,
+                                is_nullable,
+                                column_default,
+                                ordinal_position,
+                                character_maximum_length,
+                                numeric_precision,
+                                numeric_scale
+                            FROM information_schema.columns
+                            WHERE table_schema = %s AND table_name = %s
+                            ORDER BY ordinal_position
+                            """,
+                            (schema_name, table_name),
+                        )
+                        columns = cur.fetchall()
+
+                        cur.execute(
+                            """
+                            SELECT a.attname AS column_name
+                            FROM pg_index i
+                            JOIN pg_attribute a
+                                ON a.attrelid = i.indrelid
+                               AND a.attnum = ANY(i.indkey)
+                            WHERE i.indrelid = %s::regclass
+                              AND i.indisprimary
+                            """,
+                            (f"{schema_name}.{table_name}",),
+                        )
+                        primary_keys = [row["column_name"] for row in cur.fetchall()]
+
+                        cur.execute(
+                            """
+                            SELECT indexname, indexdef
+                            FROM pg_indexes
+                            WHERE schemaname = %s AND tablename = %s
+                            ORDER BY indexname
+                            """,
+                            (schema_name, table_name),
+                        )
+                        indexes = cur.fetchall()
+
+                        result.append(
+                            {
+                                "table": table_name,
+                                "type": table_type,
+                                "columns": columns,
+                                "primary_key": primary_keys,
+                                "indexes": indexes,
+                            }
+                        )
+
+            summary = {
+                "schema": schema_name,
+                "object_count": len(result),
+                "table_count": sum(1 for r in result if r["type"] == "BASE TABLE"),
+                "view_count": sum(1 for r in result if r["type"] == "VIEW"),
+            }
+            payload = {"summary": summary, "tables": result}
+            return self._response(True, data=payload, start_ms=start, warnings=warnings or None, query_cost=1)
+        except Exception as exc:
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("schema_inspection_failed", str(exc)),
+            )
+
+    def execute_raw_sql(self, **kwargs) -> Dict[str, Any]:
+        """
+        Exécute une requête SQL brute directement sur Postgres.
+
+        Args (via kwargs):
+            query (str): Requête SQL à exécuter (obligatoire).
+            params (Optional[Mapping | Sequence]): Paramètres optionnels.
+            read_only (bool): Forcer la transaction en lecture seule (défaut True).
+            limit (int): Limite du nombre de lignes renvoyées (défaut 1000, 0 = sans limite).
+            autocommit (bool): Forcer autocommit (défaut: True si lecture seule, False sinon).
+
+        Returns:
+            Dict[str, Any]: Résultat structuré avec rows/rowcount.
+        """
+        start = self._now_ms()
+        query = kwargs.get("query")
+        if not query or not str(query).strip():
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("invalid_parameters", "Le paramètre 'query' est obligatoire."),
+            )
+
+        params = kwargs.get("params")
+        read_only = kwargs.get("read_only", True)
+        limit = int(kwargs.get("limit", 1000) or 0)
+        autocommit = kwargs.get("autocommit")
+
+        stripped_query = str(query).lstrip()
+        first_token = stripped_query.split(maxsplit=1)[0].lower() if stripped_query else ""
+        if read_only and first_token not in {"select", "with", "show", "explain", "analyze"}:
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error(
+                    "read_only_violation",
+                    "Le mode lecture seule est actif. Utilisez `read_only=false` pour les requêtes d'écriture.",
+                ),
+            )
+
+        warnings: List[str] = []
+        try:
+            with self._open_postgres(read_only=bool(read_only)) as conn:
+                if autocommit is None:
+                    conn.autocommit = bool(read_only)
+                else:
+                    conn.autocommit = bool(autocommit)
+
+                with conn.cursor() as cur:
+                    cur.execute(query, params)
+                    rows: List[Dict[str, Any]] = []
+                    column_names: List[str] = []
+                    if cur.description:
+                        column_names = [col.name for col in cur.description]
+                        fetched_rows = cur.fetchall()
+                        if limit and len(fetched_rows) > limit:
+                            warnings.append(f"Résultat tronqué à {limit} lignes (limit={limit}).")
+                            fetched_rows = fetched_rows[:limit]
+                        rows = fetched_rows
+                    else:
+                        if not conn.autocommit and not read_only:
+                            conn.commit()
+
+                    data = {
+                        "command": getattr(cur, "command", first_token.upper()),
+                        "columns": column_names,
+                        "rows": rows,
+                        "rowcount": cur.rowcount,
+                    }
+                if not conn.autocommit and not read_only:
+                    conn.commit()
+
+            if not read_only:
+                warnings.append("Requête exécutée en mode écriture. Vérifiez les impacts avant déploiement.")
+            return self._response(True, data=data, start_ms=start, warnings=warnings or None, query_cost=1)
+        except Exception as exc:
+            return self._response(
+                False,
+                data=None,
+                start_ms=start,
+                error=self._error("sql_execution_failed", str(exc)),
+            )
 
     def bulk_update(self, **kwargs) -> Dict[str, Any]:
         """
