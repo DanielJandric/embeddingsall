@@ -234,17 +234,42 @@ def format_result(result: Dict[str, Any]) -> str:
 
 def _merge_params(payload: Any, kwargs: Dict[str, Any]) -> Dict[str, Any]:
     params: Dict[str, Any] = {}
+    parse_errors: list[str] = []
+
     if isinstance(kwargs, dict):
-        params.update(kwargs)
+        extra_kwargs = dict(kwargs)
+        raw_kwargs = extra_kwargs.pop("kwargs", None)
+        if raw_kwargs is not None:
+            if isinstance(raw_kwargs, str) and raw_kwargs.strip():
+                try:
+                    parsed_kwargs = json.loads(raw_kwargs)
+                    if isinstance(parsed_kwargs, dict):
+                        params.update(parsed_kwargs)
+                    else:
+                        parse_errors.append("kwargs payload is not a JSON object.")
+                except Exception as exc:  # noqa: BLE001
+                    parse_errors.append(f"kwargs JSON parse error: {exc}")
+            elif isinstance(raw_kwargs, dict):
+                params.update(raw_kwargs)
+            else:
+                parse_errors.append("kwargs payload must be a JSON string or object.")
+        params.update(extra_kwargs)
+
     if isinstance(payload, str) and payload.strip():
         try:
             parsed = json.loads(payload)
             if isinstance(parsed, dict):
                 params.update(parsed)
+            else:
+                parse_errors.append("payload is not a JSON object.")
         except Exception as exc:  # noqa: BLE001
-            params.setdefault("__parse_error__", str(exc))
+            parse_errors.append(f"payload JSON parse error: {exc}")
     elif isinstance(payload, dict):
         params.update(payload)
+
+    if parse_errors:
+        params.setdefault("__parse_error__", "; ".join(parse_errors))
+
     return params
 
 
