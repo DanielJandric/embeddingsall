@@ -361,7 +361,7 @@ def _serialize_validation(validation) -> Dict[str, Any]:
     }
 
 
-mcp.tool()
+@mcp.tool()
 async def agentic_query(payload: str = "{}", **kwargs) -> str:
     """Agentic RAG avec validation, correction et boucle réflexive."""
     params = _merge_params(payload, kwargs)
