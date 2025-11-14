@@ -571,15 +571,135 @@ class FinancialStrategy(BaseStrategy):
                 "limit": 20,
             }
 
+        def etat_params(_: ExecutionContext) -> Dict[str, Any]:
+            filters: Dict[str, Any] = {}
+            if terms.get("commune"):
+                filters["immeuble_ville"] = terms["commune"]
+            pattern = terms.get("file_pattern")
+            if isinstance(pattern, str) and pattern.strip("%"):
+                filters["immeuble_nom"] = pattern
+            else:
+                filters["immeuble_nom"] = f"%{terms['term']}%"
+            slug = terms.get("property_slug")
+            if slug:
+                filters["file_path"] = "%" + slug.replace("-", "%") + "%"
+            return {
+                "table_name": "etats_locatifs",
+                "filters": filters,
+                "limit": 100,
+            }
+
         def aggregate(ctx: ExecutionContext) -> Dict[str, Any]:
             overview = _extract_data(ctx.memory.get("financial_overview", {})) or []
+            raw_etats_entry = ctx.memory.get("financial_etats", {})
+            etats_payload = raw_etats_entry.get("data") if isinstance(raw_etats_entry, dict) else raw_etats_entry
+            parsed_etats = _parse_tool_payload(etats_payload) if etats_payload is not None else None
+            if isinstance(parsed_etats, dict) and "data" in parsed_etats:
+                etats_locatifs = parsed_etats.get("data") or []
+            elif isinstance(parsed_etats, list):
+                etats_locatifs = parsed_etats
+            else:
+                etats_locatifs = _extract_data(raw_etats_entry) or []
+            if not isinstance(etats_locatifs, list):
+                etats_locatifs = []
+            etats = []
+            if isinstance(etats_locatifs, list):
+                for raw in etats_locatifs:
+                    if not isinstance(raw, dict):
+                        continue
+                    try:
+                        total = float(raw.get("loyer_annuel_total") or 0.0)
+                    except (TypeError, ValueError):
+                        total = 0.0
+                    try:
+                        surface = float(raw.get("surface_totale_m2") or 0.0)
+                    except (TypeError, ValueError):
+                        surface = 0.0
+                    etats.append(
+                        {
+                            "property_key": _slugify(str(raw.get("immeuble_nom") or "")),
+                            "immeuble_nom": raw.get("immeuble_nom"),
+                            "immeuble_ville": raw.get("immeuble_ville"),
+                            "loyer_annuel_total": total,
+                            "surface_totale_m2": surface,
+                            "loyer_m2": total / surface if surface else None,
+                            "nb_unites_louees": raw.get("nb_unites_louees"),
+                            "nb_unites_vacantes": raw.get("nb_unites_vacantes"),
+                            "taux_vacance_financier": raw.get("taux_vacance_financier"),
+                            "source_path": raw.get("file_path")
+                            or (raw.get("metadata") or {}).get("relative_path"),
+                            "document_id": raw.get("document_id") or raw.get("id"),
+                        }
+                    )
+
+            property_details = ctx.memory.get("property_details") or {}
+            property_entries = property_details.get("properties") if isinstance(property_details, dict) else None
+            if isinstance(property_entries, list):
+                for entry in property_entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    payload = entry.get("payload") or {}
+                    property_info = payload.get("property") or {}
+                    etat_data = payload.get("etat_locatif")
+                    if not isinstance(etat_data, dict):
+                        continue
+                    property_key = property_info.get("property_key") or entry.get("property_key")
+                    try:
+                        total = float(etat_data.get("loyer_annuel_total") or 0.0)
+                    except (TypeError, ValueError):
+                        total = 0.0
+                    try:
+                        surface = float(etat_data.get("surface_totale_m2") or 0.0)
+                    except (TypeError, ValueError):
+                        surface = None
+                    etats.append(
+                        {
+                            "property_key": property_key or _slugify(str(etat_data.get("immeuble_nom") or "")),
+                            "immeuble_nom": etat_data.get("immeuble_nom"),
+                            "immeuble_ville": etat_data.get("immeuble_ville"),
+                            "loyer_annuel_total": total,
+                            "surface_totale_m2": surface,
+                            "loyer_m2": (total / surface) if surface else None,
+                            "nb_unites_louees": etat_data.get("nb_unites_louees"),
+                            "nb_unites_vacantes": etat_data.get("nb_unites_vacantes"),
+                            "taux_vacance_financier": etat_data.get("taux_vacance_financier"),
+                            "source_path": etat_data.get("source_path"),
+                            "document_id": etat_data.get("document_id"),
+                        }
+                    )
+
+            deduped_etats: List[Dict[str, Any]] = []
+            seen_keys: set = set()
+            for etat in etats:
+                if not isinstance(etat, dict):
+                    continue
+                key_tuple = (
+                    etat.get("document_id"),
+                    etat.get("source_path"),
+                    etat.get("property_key"),
+                    etat.get("loyer_annuel_total"),
+                )
+                if key_tuple in seen_keys:
+                    continue
+                seen_keys.add(key_tuple)
+                deduped_etats.append(etat)
+            etats = deduped_etats
+
             metrics = []
             for item in overview:
                 if isinstance(item, dict):
                     rent_total = item.get("rent_total_chf")
                     if isinstance(rent_total, (int, float)):
                         metrics.append(float(rent_total))
-            sources = _collect_sources(overview)
+            etat_totals = []
+            for item in etats:
+                if isinstance(item, dict):
+                    rent_total = item.get("loyer_annuel_total")
+                    if isinstance(rent_total, (int, float)):
+                        etat_totals.append(float(rent_total))
+                        metrics.append(float(rent_total))
+
+            sources = _collect_sources(overview, etats)
             property_keys = [
                 str(item.get("property_key"))
                 for item in overview
@@ -589,10 +709,31 @@ class FinancialStrategy(BaseStrategy):
                 src = f"property:{key}"
                 if src not in sources:
                     sources.append(src)
+            for etat in etats:
+                etat_key = etat.get("property_key")
+                if etat_key:
+                    tagged = f"property:{etat_key}"
+                    if tagged not in sources:
+                        sources.append(tagged)
+                doc_id = etat.get("document_id")
+                file_path = etat.get("source_path")
+                if doc_id:
+                    tagged = f"doc:etat_locatif:{doc_id}"
+                    if tagged not in sources:
+                        sources.append(tagged)
+                if file_path:
+                    tagged = f"doc:{file_path}"
+                    if tagged not in sources:
+                        sources.append(tagged)
+
             summary = f"Analyse financière pour '{query}'."
             return {
                 "summary": summary,
-                "details": {"financials": overview},
+                "details": {
+                    "financials": overview,
+                    "etats_locatifs": etats,
+                    "etats_totals_chf": sum(etat_totals) if etat_totals else 0.0,
+                },
                 "metrics": metrics,
                 "sources": sources,
             }
@@ -604,7 +745,13 @@ class FinancialStrategy(BaseStrategy):
                     "query_table",
                     cashflow_params,
                     "Extraction des flux financiers",
-                )
+                ),
+                _make_tool_step(
+                    "financial_etats",
+                    "query_table",
+                    etat_params,
+                    "Récupération des états locatifs financiers",
+                ),
             ],
             [_make_aggregate_step("financial_summary", aggregate)],
         ]
@@ -1019,6 +1166,25 @@ def _build_synthesis_summary(ctx: ExecutionContext, query: str) -> Dict[str, Any
     property_details = ctx.memory.get("property_details") or {}
     stakeholder_details = ctx.memory.get("stakeholder_details") or {}
 
+    financial_details = (
+        financial.get("details") if isinstance(financial, dict) else {}
+    ) or {}
+    etats_financials = financial_details.get("etats_locatifs") or []
+    if not isinstance(etats_financials, list):
+        etats_financials = []
+
+    etats_by_property: Dict[str, List[Dict[str, Any]]] = {}
+    total_etats_loyers = 0.0
+    for etat in etats_financials:
+        if not isinstance(etat, dict):
+            continue
+        key = etat.get("property_key") or ""
+        if key:
+            etats_by_property.setdefault(key, []).append(etat)
+        rent_total = etat.get("loyer_annuel_total")
+        if isinstance(rent_total, (int, float)):
+            total_etats_loyers += float(rent_total)
+
     properties_payload = []
     financial_rollup_total = 0.0
     financial_rollup_base = 0.0
@@ -1097,14 +1263,40 @@ def _build_synthesis_summary(ctx: ExecutionContext, query: str) -> Dict[str, Any
                 "etat_locatif": etat,
             }
         )
+        if key and etats_by_property.get(key):
+            properties_payload[-1]["etats_locatifs_financiers"] = etats_by_property[key]
 
     stakeholder_payload = stakeholder_details.get("stakeholders") or []
+
+    for etat in etats_financials:
+        if not isinstance(etat, dict):
+            continue
+        doc_id = etat.get("document_id")
+        if doc_id and doc_id in document_ids_seen:
+            continue
+        if doc_id:
+            document_ids_seen.add(doc_id)
+        file_name = (
+            etat.get("source_path")
+            or etat.get("immeuble_nom")
+            or (f"etat_locatif_{doc_id}" if doc_id else "etat_locatif")
+        )
+        documents_payload.append(
+            {
+                "file_name": file_name,
+                "document_id": doc_id,
+                "summary": None,
+                "updated_at": None,
+                "source": etat.get("property_key"),
+                "relative_path": etat.get("source_path"),
+            }
+        )
 
     metrics = {
         "property_count": len(properties_payload),
         "document_count": len(documents_payload),
         "stakeholder_count": len(stakeholder_payload),
-        "rent_total_chf": round(financial_rollup_total, 2),
+        "rent_total_chf": round(financial_rollup_total + total_etats_loyers, 2),
         "rent_principal_chf": round(financial_rollup_base, 2),
     }
 
@@ -1132,6 +1324,11 @@ def _build_synthesis_summary(ctx: ExecutionContext, query: str) -> Dict[str, Any
             doc_source = f"doc:{file_name}"
             if doc_source not in sources:
                 sources.append(doc_source)
+        rel_path = doc.get("relative_path")
+        if rel_path:
+            rel_source = f"doc:{rel_path}"
+            if rel_source not in sources:
+                sources.append(rel_source)
 
     return {
         "summary": "\n".join(summary_lines),

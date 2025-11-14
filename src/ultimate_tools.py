@@ -314,19 +314,85 @@ class UltimateTools:
         except Exception:
             return []
 
-    def _fetch_linked_etat(self, property_key: str) -> Optional[Dict[str, Any]]:
+    def _fetch_linked_etat(
+        self, property_key: str, property_record: Optional[Dict[str, Any]] = None
+    ) -> Optional[Dict[str, Any]]:
+        if not property_key:
+            return None
         try:
-            query = (
+            result = (
                 self.client.table("etats_locatifs")
                 .select("*")
                 .eq("metadata->>property_key", property_key)
                 .limit(1)
+                .execute()
             )
-            result = query.execute()
             if result.data:
                 return result.data[0]
         except Exception:
             pass
+        patterns: List[str] = []
+        slug_pattern = property_key.replace("-", "%")
+        patterns.append(slug_pattern)
+        tokens = [tok for tok in property_key.split("-") if tok]
+        stop_tokens = {"avenue", "av", "de", "la", "le", "les", "baujahr", "immeuble", "suisse"}
+        core_tokens = [tok for tok in tokens if tok and tok not in stop_tokens]
+        if core_tokens:
+            patterns.append("%".join(core_tokens))
+        numeric_tokens = [tok for tok in core_tokens if any(ch.isdigit() for ch in tok)]
+        textual_tokens = [tok for tok in core_tokens if tok not in numeric_tokens]
+        if textual_tokens and numeric_tokens:
+            compact = numeric_tokens + textual_tokens
+            patterns.append("%".join(compact))
+        if property_record:
+            addresses = property_record.get("addresses") or []
+            for addr in addresses:
+                if not isinstance(addr, str):
+                    continue
+                normalized = unicodedata.normalize("NFKD", addr).encode("ascii", "ignore").decode("ascii")
+                normalized = normalized.lower()
+                normalized = normalized.replace("avenue", "av")
+                normalized = re.sub(r"[^a-z0-9]+", "%", normalized)
+                normalized = re.sub(r"%+", "%", normalized).strip("%")
+                if normalized:
+                    patterns.append(normalized)
+        base_tokens = [
+            tok
+            for tok in core_tokens
+            if tok in {"gare", "martigny"} or any(ch.isdigit() for ch in tok)
+        ]
+        if len(base_tokens) >= 2:
+            for size in range(len(base_tokens), 1, -1):
+                for start in range(0, len(base_tokens) - size + 1):
+                    slice_tokens = base_tokens[start : start + size]
+                    if "martigny" not in slice_tokens:
+                        continue
+                    if not any(any(ch.isdigit() for ch in tok) for tok in slice_tokens):
+                        continue
+                    patterns.append("%".join(slice_tokens))
+        patterns.extend(core_tokens)
+        deduped: List[str] = []
+        seen: set[str] = set()
+        for raw in patterns:
+            trimmed = raw.strip("%")
+            if not trimmed or trimmed in seen:
+                continue
+            seen.add(trimmed)
+            deduped.append(trimmed)
+        patterns = deduped
+        for pattern in patterns:
+            try:
+                fallback = (
+                    self.client.table("etats_locatifs")
+                    .select("*")
+                    .ilike("file_path", f"%{pattern}%")
+                    .limit(1)
+                    .execute()
+                )
+                if fallback.data:
+                    return fallback.data[0]
+            except Exception:
+                continue
         return None
 
     async def _run_async(self, func, *args, **kwargs):
@@ -756,7 +822,7 @@ class UltimateTools:
             ]
 
         if include_etat and key:
-            etat = self._fetch_linked_etat(key)
+            etat = self._fetch_linked_etat(key, record)
             if etat:
                 complement["etat_locatif"] = {
                     "immeuble_nom": etat.get("immeuble_nom"),
