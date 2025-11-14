@@ -71,6 +71,31 @@ def _extract_data(entry: Dict[str, Any]) -> Any:
     return data
 
 
+def _parse_tool_payload(raw: Any) -> Optional[Dict[str, Any]]:
+    if raw is None:
+        return None
+    parsed: Any
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return None
+    elif isinstance(raw, dict):
+        parsed = raw
+    else:
+        return None
+    if isinstance(parsed, dict):
+        if parsed.get("success") is False:
+            return None
+        data = parsed.get("data")
+        if isinstance(data, (dict, list)):
+            return data
+        if data is None:
+            return parsed
+        return parsed
+    return parsed if isinstance(parsed, (dict, list)) else None
+
+
 STOPWORDS = {
     "analyse",
     "analysis",
@@ -289,6 +314,159 @@ def _extract_terms(query: str) -> Dict[str, Any]:
         "street": street,
         "street_number": street_number,
     }
+
+
+def _build_document_search_patterns(property_info: Dict[str, Any], property_key: str) -> List[str]:
+    patterns: List[str] = []
+    tokens: List[str] = []
+
+    def _add_pattern(parts: List[str]) -> None:
+        cleaned = [part for part in parts if part]
+        if not cleaned:
+            return
+        pattern = "%" + "%".join(cleaned) + "%"
+        if pattern not in patterns:
+            patterns.append(pattern)
+
+    addresses = property_info.get("addresses") or []
+    for address in addresses:
+        normalized = _normalize(str(address))
+        addr_tokens = [
+            tok
+            for tok in normalized.split()
+            if tok
+            and (
+                tok not in STOPWORDS
+                or tok in ADDRESS_LEADS
+                or NUMERIC_PATTERN.match(tok)
+                or tok.isdigit()
+            )
+        ]
+        if addr_tokens:
+            tokens.extend(addr_tokens)
+            _add_pattern(addr_tokens)
+            if len(addr_tokens) >= 3:
+                _add_pattern(addr_tokens[:3])
+                _add_pattern(addr_tokens[-3:])
+
+    slug_tokens = [
+        tok
+        for tok in str(property_key).split("-")
+        if tok
+        and (tok not in STOPWORDS or tok in ADDRESS_LEADS)
+        and (len(tok) > 1 or tok.isdigit())
+    ]
+    if slug_tokens:
+        _add_pattern(slug_tokens)
+        tokens.extend(slug_tokens)
+
+    communes = property_info.get("communes") or []
+    if communes:
+        normalized_commune = _normalize(str(communes[0]))
+        commune_tokens = [
+            tok
+            for tok in normalized_commune.split()
+            if tok and tok not in STOPWORDS
+        ]
+        if commune_tokens:
+            _add_pattern(commune_tokens)
+            tokens.extend(commune_tokens)
+
+    postal_codes = property_info.get("postal_codes") or []
+    if postal_codes:
+        _add_pattern([str(postal_codes[0])])
+
+    refined_tokens = [
+        tok
+        for tok in tokens
+        if tok
+        and (
+            tok not in STOPWORDS
+            or tok in ADDRESS_LEADS
+            or NUMERIC_PATTERN.match(tok)
+            or tok.isdigit()
+        )
+    ]
+    if refined_tokens:
+        _add_pattern(refined_tokens[:5])
+        if len(refined_tokens) >= 3:
+            _add_pattern([refined_tokens[0], refined_tokens[-1]])
+
+    numeric_tokens = [tok for tok in refined_tokens if NUMERIC_PATTERN.match(tok)]
+    street_tokens = [
+        tok for tok in refined_tokens if tok in ADDRESS_LEADS or "gare" in tok
+    ]
+    commune_tokens = [
+        tok for tok in refined_tokens if tok.endswith("ny") or tok.endswith("gny")
+    ]
+    if street_tokens and numeric_tokens:
+        combo = [street_tokens[0], numeric_tokens[0]]
+        if commune_tokens:
+            combo.append(commune_tokens[0])
+        _add_pattern(combo)
+
+    return patterns[:10]
+
+
+async def _fetch_additional_documents(
+    ctx: ExecutionContext, property_key: str, property_info: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    patterns = _build_document_search_patterns(property_info, property_key)
+    if not patterns:
+        return []
+
+    collected: List[Dict[str, Any]] = []
+    seen_ids: set = set()
+    filter_columns = ["file_name", "metadata->>relative_path"]
+
+    for pattern in patterns:
+        for column in filter_columns:
+            try:
+                raw = await ctx.call_tool(
+                    "query_table",
+                    {
+                        "table_name": "documents_full",
+                        "filters": {column: pattern},
+                        "limit": 50,
+                    },
+                )
+            except Exception:
+                continue
+
+            payload = _parse_tool_payload(raw)
+            if not isinstance(payload, list):
+                continue
+            for record in payload:
+                if not isinstance(record, dict):
+                    continue
+                doc_id = record.get("id")
+                if not doc_id or doc_id in seen_ids:
+                    continue
+                seen_ids.add(doc_id)
+                meta = record.get("metadata")
+                if isinstance(meta, str):
+                    try:
+                        meta = json.loads(meta)
+                    except Exception:
+                        meta = {}
+                    record["metadata"] = meta
+                if not isinstance(meta, dict):
+                    meta = {}
+                collected.append(
+                    {
+                        "id": doc_id,
+                        "document_id": doc_id,
+                        "file_name": record.get("file_name"),
+                        "summary": meta.get("summary_short"),
+                        "updated_at": record.get("updated_at"),
+                        "relative_path": meta.get("relative_path"),
+                        "source_property": property_key,
+                    }
+                )
+                if len(collected) >= 60:
+                    return collected
+
+    return collected
 
 
 class BaseStrategy:
@@ -730,6 +908,7 @@ class SynthesisStrategy(BaseStrategy):
                                     doc_details.append(
                                         {
                                             "id": record.get("id"),
+                                            "document_id": record.get("id"),
                                             "file_name": record.get("file_name"),
                                             "summary": (record.get("metadata") or {}).get(
                                                 "summary_short"
@@ -741,6 +920,23 @@ class SynthesisStrategy(BaseStrategy):
                                 continue
                         if doc_details:
                             payload["documents"] = doc_details
+                    extra_docs = await _fetch_additional_documents(
+                        ctx, key, property_info
+                    )
+                    if extra_docs:
+                        existing = payload.get("documents") or []
+                        existing_ids = {
+                            (doc.get("id") or doc.get("document_id"))
+                            for doc in existing
+                            if isinstance(doc, dict)
+                        }
+                        for extra in extra_docs:
+                            extra_id = extra.get("id") or extra.get("document_id")
+                            if not extra_id or extra_id in existing_ids:
+                                continue
+                            existing.append(extra)
+                            existing_ids.add(extra_id)
+                        payload["documents"] = existing
                     details.append({"property_key": key, "payload": payload})
             ctx.memory["property_details"] = {"properties": details}
             return {"properties": details}
@@ -770,24 +966,6 @@ class SynthesisStrategy(BaseStrategy):
                     details.append({"stakeholder": name, "payload": payload})
             ctx.memory["stakeholder_details"] = {"stakeholders": details}
             return {"stakeholders": details}
-
-        def _parse_tool_payload(raw: Any) -> Optional[Dict[str, Any]]:
-            if raw is None:
-                return None
-            if isinstance(raw, str):
-                try:
-                    parsed = json.loads(raw)
-                except Exception:
-                    return None
-            elif isinstance(raw, dict):
-                parsed = raw
-            else:
-                return None
-            if isinstance(parsed, dict):
-                if parsed.get("success") is False:
-                    return None
-                return parsed.get("data") or parsed
-            return None
 
         property_details_step = ExecutionStep(
             name="property_details",
@@ -846,6 +1024,7 @@ def _build_synthesis_summary(ctx: ExecutionContext, query: str) -> Dict[str, Any
     financial_rollup_base = 0.0
     vacancy_flags: List[Dict[str, Any]] = []
     documents_payload = []
+    document_ids_seen: set = set()
 
     for entry in property_details.get("properties", []):
         if not isinstance(entry, dict):
@@ -858,15 +1037,20 @@ def _build_synthesis_summary(ctx: ExecutionContext, query: str) -> Dict[str, Any
         for doc in documents:
             if not isinstance(doc, dict):
                 continue
+            doc_id = doc.get("document_id") or doc.get("id")
+            if doc_id and doc_id in document_ids_seen:
+                continue
+            if doc_id:
+                document_ids_seen.add(doc_id)
             doc_entry = {
                 "file_name": doc.get("file_name"),
-                "document_id": doc.get("id"),
+                "document_id": doc_id,
                 "summary": doc.get("summary"),
                 "updated_at": doc.get("updated_at"),
                 "source": key,
+                "relative_path": doc.get("relative_path"),
             }
-            if doc_entry not in documents_payload:
-                documents_payload.append(doc_entry)
+            documents_payload.append(doc_entry)
         rent_total = (
             property_info.get("rent_total_chf")
             or (etat.get("loyer_annuel_total"))
