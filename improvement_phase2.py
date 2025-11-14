@@ -127,7 +127,42 @@ ADDRESS_STOP_MARKERS = [
     "newsat",
     "dbs group",
     "integrated-report",
-]
+}
+
+ADDRESS_PREFIXES = {
+    "avenue",
+    "av",
+    "av.",
+    "rue",
+    "route",
+    "chemin",
+    "impasse",
+    "allee",
+    "allée",
+    "boulevard",
+    "bd",
+    "place",
+    "quai",
+    "sentier",
+    "passage",
+    "esplanade",
+    "parc",
+    "cours",
+    "square",
+    "grand-rue",
+}
+
+ADDRESS_REGEX = re.compile(
+    r"\b("
+    r"avenue|av\.?|rue|route|chemin|impasse|allee|allée|boulevard|bd|place|quai|sentier|passage|esplanade|parc|cours|square"
+    r")\s+[A-Za-zÀ-ÿ'’\-\s]*?\d{1,4}(?:[A-Za-z]?)(?:\s*(?:-|/|au|à)\s*\d{1,4}[A-Za-z]?)?",
+    re.IGNORECASE,
+)
+
+COMMUNE_REGEX = re.compile(
+    r"(?:[A-Z][a-zÀ-ÿ']{2,}(?:[-\s][A-Z][a-zÀ-ÿ']{2,})*|[A-Z]{3,})",
+    re.UNICODE,
+)
 
 COMMUNE_STOPWORDS = {
     "loyers",
@@ -141,13 +176,47 @@ COMMUNE_STOPWORDS = {
     "resumé",
     "résumé",
     "domicim",
+    "representé",
+    "representé",
+    "représenté",
+    "représente",
+    "services",
+    "service",
+    "immobilier",
+    "immobiliers",
+    "bonjour",
+    "contrat",
+    "investis",
+    "gérance",
+    "gerance",
+    "otis",
+    "suisse",
+    "baujahr",
 }
+
+COMMUNE_NOISE_TOKENS = {
+    "sa",
+    "ag",
+    "sas",
+    "sa.",
+    "ltd",
+    "inc",
+    "sas.",
+    "la",
+    "le",
+    "les",
+}
+
+POSTAL_REGEX = re.compile(r"\b(\d{4})\b")
 
 
 def clean_address_fragment(value: Optional[str]) -> str:
     if not value:
         return ""
     text = normalise_text(value)
+    match = ADDRESS_REGEX.search(text)
+    if match:
+        text = match.group(0)
     lowered = text.lower()
     for marker in ADDRESS_STOP_MARKERS:
         idx = lowered.find(marker)
@@ -155,7 +224,8 @@ def clean_address_fragment(value: Optional[str]) -> str:
             text = text[:idx]
             lowered = text.lower()
     text = re.sub(r"\b(n°|no|numero|numéro)\b.*", "", text, flags=re.IGNORECASE)
-    text = text.strip()
+    text = re.sub(r"[,:;].*$", "", text)
+    text = text.strip(" -_,")
     return text
 
 
@@ -163,33 +233,115 @@ def clean_commune_name(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
     text = normalise_text(value)
-    lowered = text.lower()
-    for stop in COMMUNE_STOPWORDS:
-        idx = lowered.find(stop)
-        if idx > 0:
-            text = text[:idx]
-            break
-    text = text.strip()
-    return text or None
+    if not text:
+        return None
+    matches = COMMUNE_REGEX.findall(text)
+    for match in reversed(matches):
+        lower = match.lower()
+        if lower in COMMUNE_STOPWORDS:
+            continue
+        if lower in ADDRESS_PREFIXES or lower in COMMUNE_NOISE_TOKENS:
+            continue
+        if len(lower) <= 1:
+            continue
+        return match
+    text = re.sub(r"[0-9\-_/]", " ", text)
+    tokens = [tok for tok in text.split() if tok.isalpha()]
+    for tok in tokens:
+        lowered = tok.lower()
+        if lowered in COMMUNE_STOPWORDS or lowered in ADDRESS_PREFIXES or lowered in COMMUNE_NOISE_TOKENS:
+            continue
+        if len(tok) > 1:
+            return tok.title()
+    return None
+
+
+def clean_canton_name(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    text = normalise_text(value)
+    if not text:
+        return None
+    text = re.sub(r"(?i)\bcanton\s+de\s+", "", text)
+    text = re.sub(r"[0-9]", "", text).strip(" -_,")
+    if not text:
+        return None
+    if len(text) > 20:
+        text = text[:20]
+    return text.title()
+
+
+def extract_postal_code(*values: Optional[Any]) -> Optional[str]:
+    for value in values:
+        if value is None:
+            continue
+        text = normalise_text(str(value))
+        match = POSTAL_REGEX.search(text)
+        if match:
+            return match.group(1)
+    return None
+
+
+def _slugify_parts(parts: List[Optional[str]]) -> str:
+    tokens: List[str] = []
+    for part in parts:
+        if not part:
+            continue
+        normalized = strip_accents(part.lower())
+        normalized = re.sub(r"[^a-z0-9]+", "-", normalized)
+        for tok in normalized.split("-"):
+            if tok and (not tokens or tok != tokens[-1]):
+                tokens.append(tok)
+    if len(tokens) > 8:
+        tokens = tokens[:8]
+    return "-".join(tokens)
 
 
 def normalise_address(*parts: Optional[str]) -> str:
-    usable = [clean_address_fragment(p) for p in parts if p]
-    text = " ".join(u for u in usable if u)
-    text = strip_accents(text.lower())
-    text = re.sub(r"[^a-z0-9]+", "-", text)
-    text = text.strip("-")
-    if not text:
-        return ""
-    tokens = [tok for tok in text.split("-") if tok]
-    deduped: List[str] = []
-    for tok in tokens:
-        if deduped and tok == deduped[-1]:
+    address_candidate: Optional[str] = None
+    commune_candidate: Optional[str] = None
+    canton_candidate: Optional[str] = None
+    postal_candidate: Optional[str] = None
+    fallback_parts: List[str] = []
+
+    for raw in parts:
+        if raw is None:
             continue
-        deduped.append(tok)
-    if len(deduped) > 8:
-        deduped = deduped[:8]
-    return "-".join(deduped)
+        text = normalise_text(str(raw))
+        if not text:
+            continue
+
+        if not address_candidate:
+            candidate = clean_address_fragment(text)
+            if candidate:
+                address_candidate = candidate
+                postal_candidate = postal_candidate or extract_postal_code(text)
+                continue
+
+        if not commune_candidate:
+            commune = clean_commune_name(text)
+            if commune:
+                commune_candidate = commune
+                continue
+
+        if not postal_candidate:
+            postal = extract_postal_code(text)
+            if postal:
+                postal_candidate = postal
+                continue
+
+        if not canton_candidate:
+            canton = clean_canton_name(text)
+            if canton:
+                canton_candidate = canton
+                continue
+
+        fallback_parts.append(text)
+
+    slug = _slugify_parts([address_candidate, commune_candidate, postal_candidate, canton_candidate])
+    if slug:
+        return slug
+    return _slugify_parts(fallback_parts)
 
 
 def safe_float(value: Any) -> Optional[float]:
@@ -482,13 +634,19 @@ def build_document_snapshots(
         raw_commune = swiss.get("commune") or metadata.get("commune")
         commune = clean_commune_name(raw_commune)
 
+        postal_code = extract_postal_code(
+            swiss.get("code_postal"),
+            metadata.get("postal_code"),
+            raw_address,
+        )
+
         snapshot = DocumentSnapshot(
             document_id=doc_id,
             file_name=doc.get("file_name"),
             document_type=metadata.get("document_type") or swiss.get("type_document"),
             canton=normalise_text(swiss.get("canton") or metadata.get("canton")) or None,
             commune=commune,
-            postal_code=swiss.get("code_postal") or metadata.get("postal_code"),
+            postal_code=postal_code,
             address=address,
             montant_total=safe_float(swiss.get("montant_total")),
             montant_principal=safe_float(swiss.get("montant_principal")),
