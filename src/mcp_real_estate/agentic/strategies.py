@@ -76,6 +76,7 @@ STOPWORDS = {
     "analysis",
     "complete",
     "complète",
+    "complet",
     "de",
     "des",
     "du",
@@ -97,11 +98,70 @@ STOPWORDS = {
     "évaluation",
     "due",
     "diligence",
-    "analyse",
     "full",
-    "complet",
-    "complete",
 }
+
+ADDRESS_LEADS = {
+    "avenue",
+    "av",
+    "av.",
+    "route",
+    "rue",
+    "chemin",
+    "cheminement",
+    "impasse",
+    "allee",
+    "allée",
+    "boulevard",
+    "bd",
+    "place",
+    "square",
+    "quai",
+    "cours",
+    "sentier",
+    "passage",
+    "esplanade",
+    "parc",
+    "villa",
+    "clos",
+    "grand-rue",
+    "grand",
+}
+
+ADDRESS_CONNECTORS = {
+    "de",
+    "du",
+    "des",
+    "la",
+    "le",
+    "les",
+    "d",
+    "l",
+    "sur",
+    "a",
+    "à",
+    "au",
+}
+
+TRAILING_BREAK_WORDS = {
+    "caracteristiques",
+    "caractéristiques",
+    "surface",
+    "surfaces",
+    "loyer",
+    "loyers",
+    "locataire",
+    "locataires",
+    "valorisation",
+    "etat",
+    "état",
+    "locatif",
+    "rent",
+    "financier",
+    "analyse",
+}
+
+NUMERIC_PATTERN = re.compile(r"^\d{1,4}(?:-\d{1,4})?$")
 
 
 def _normalize(text: str) -> str:
@@ -125,59 +185,94 @@ def _slugify(value: str, *, max_tokens: int = 8) -> str:
     return "-".join(tokens)
 
 
+def _split_tokens_until_break(tokens: List[str]) -> List[str]:
+    collected: List[str] = []
+    for tok in tokens:
+        if tok in TRAILING_BREAK_WORDS:
+            break
+        collected.append(tok)
+    return collected
+
+
 def _extract_terms(query: str) -> Dict[str, Any]:
     normalized = _normalize(query)
-    raw_tokens = normalized.split()
-    keywords: List[str] = [tok for tok in raw_tokens if tok and tok not in STOPWORDS]
-    if not keywords and raw_tokens:
-        keywords = raw_tokens[:4]
-
-    numeric_pattern = re.compile(r"^\d{1,4}(?:-\d{1,4})?$")
-    numeric_tokens = [tok for tok in keywords if numeric_pattern.match(tok)]
+    tokens = normalized.split()
 
     candidate_communes = re.findall(r"\b([A-Z][a-zÀ-ÿ\-']{2,})\b", query)
     commune = candidate_communes[-1] if candidate_communes else ""
-    if not commune:
-        for token in reversed(keywords):
-            if not numeric_pattern.match(token):
-                commune = token.replace("-", " ").title()
-                break
+    normalized_commune = _normalize(commune) if commune else ""
+    commune_slug = _slugify(commune) if commune else ""
 
-    primary_keywords = keywords[-5:] if len(keywords) > 5 else keywords
-    if commune:
-        commune_slug = _slugify(commune)
-        if commune_slug and commune_slug not in primary_keywords:
-            primary_keywords.append(commune_slug)
-
-    # Deduplicate successive keywords while preserving order
-    deduped_keywords: List[str] = []
-    for token in primary_keywords:
-        if deduped_keywords and token == deduped_keywords[-1]:
-            continue
-        deduped_keywords.append(token)
-
-    file_pattern = ""
-    if deduped_keywords:
-        file_pattern = "%" + "%".join(deduped_keywords) + "%"
-
-    property_slug = _slugify(" ".join(deduped_keywords))
-    if not property_slug:
-        property_slug = _slugify(" ".join(keywords))
-
-    street_tokens: List[str] = []
-    street_number = ""
-    for tok in keywords:
-        if numeric_pattern.match(tok):
-            street_number = tok
+    street_number_idx = -1
+    for idx, tok in enumerate(tokens):
+        if NUMERIC_PATTERN.match(tok):
+            street_number_idx = idx
             break
-        street_tokens.append(tok)
 
-    street = " ".join(street_tokens[-3:])
+    street_start_idx = 0
+    if street_number_idx != -1:
+        for idx in range(street_number_idx - 1, -1, -1):
+            if tokens[idx] in ADDRESS_LEADS:
+                street_start_idx = idx
+                break
+        else:
+            street_start_idx = max(0, street_number_idx - 3)
+        raw_address_tokens = tokens[street_start_idx : street_number_idx + 1]
+    else:
+        street_start_idx = next(
+            (idx for idx, tok in enumerate(tokens) if tok in ADDRESS_LEADS), 0
+        )
+        raw_address_tokens = tokens[street_start_idx:]
+
+    address_tokens = _split_tokens_until_break(raw_address_tokens)
+    address_tokens = [tok for tok in address_tokens if tok]
+
+    if not address_tokens and tokens:
+        address_tokens = tokens[: min(len(tokens), 5)]
+
+    slug_tokens = [
+        tok
+        for tok in address_tokens
+        if tok not in STOPWORDS
+        or tok in ADDRESS_LEADS
+        or tok in ADDRESS_CONNECTORS
+        or NUMERIC_PATTERN.match(tok)
+    ]
+    if normalized_commune:
+        slug_tokens.append(normalized_commune)
+    property_slug_source = " ".join(slug_tokens or address_tokens)
+    property_slug = _slugify(property_slug_source) or _slugify(normalized)
+
+    pattern_tokens = address_tokens.copy()
+    if normalized_commune and normalized_commune not in pattern_tokens:
+        pattern_tokens.append(normalized_commune)
+
+    pattern_tokens = [tok for tok in pattern_tokens if tok]
+    file_pattern = "%" + "%".join(pattern_tokens) + "%" if pattern_tokens else ""
+
+    keywords = [
+        tok
+        for tok in address_tokens
+        if tok not in STOPWORDS or tok in ADDRESS_LEADS or NUMERIC_PATTERN.match(tok)
+    ]
+    if commune_slug and commune_slug not in keywords:
+        keywords.append(commune_slug)
+    term = " ".join(pattern_tokens).strip() or normalized
+
+    street_number = ""
+    street_words: List[str] = []
+    for tok in address_tokens:
+        if NUMERIC_PATTERN.match(tok) and not street_number:
+            street_number = tok
+            continue
+        if tok not in ADDRESS_CONNECTORS:
+            street_words.append(tok)
+    street = " ".join(street_words)
 
     return {
-        "term": " ".join(deduped_keywords).strip() or normalized,
+        "term": term,
         "commune": commune.strip(),
-        "keywords": deduped_keywords,
+        "keywords": keywords or pattern_tokens,
         "file_pattern": file_pattern or (f"%{normalized.replace(' ', '%')}%" if normalized else ""),
         "property_slug": property_slug,
         "street": street,
