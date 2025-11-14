@@ -327,6 +327,15 @@ class FactualStrategy(BaseStrategy):
             documents = _extract_data(ctx.memory.get("documents_lookup", {})) or []
             properties = _extract_data(ctx.memory.get("property_lookup", {})) or []
             sources = _collect_sources(documents, properties)
+            property_keys = [
+                str(item.get("property_key"))
+                for item in properties
+                if isinstance(item, dict) and item.get("property_key")
+            ]
+            for key in property_keys:
+                src = f"property:{key}"
+                if src not in sources:
+                    sources.append(src)
             summary = f"Recherche factuelle pour '{query}' avec {len(properties)} propriétés et {len(documents)} documents."
             return {
                 "summary": summary,
@@ -382,6 +391,15 @@ class FinancialStrategy(BaseStrategy):
                     if isinstance(rent_total, (int, float)):
                         metrics.append(float(rent_total))
             sources = _collect_sources(overview)
+            property_keys = [
+                str(item.get("property_key"))
+                for item in overview
+                if isinstance(item, dict) and item.get("property_key")
+            ]
+            for key in property_keys:
+                src = f"property:{key}"
+                if src not in sources:
+                    sources.append(src)
             summary = f"Analyse financière pour '{query}'."
             return {
                 "summary": summary,
@@ -665,13 +683,9 @@ class SynthesisStrategy(BaseStrategy):
             },
         )
 
-        phases = (
-            factual.phases[:-1]
-            + financial.phases[:-1]
-            + comparative.phases[:-1]
-            + land.phases[:-1]
-            + stakeholder.phases[:-1]
-        )
+        phases: List[List[ExecutionStep]] = []
+        for plan in (factual, financial, comparative, land, stakeholder):
+            phases.extend(plan.phases)
         phases.append([synthesis_step])
 
         return ExecutionPlan(
