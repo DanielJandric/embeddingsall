@@ -127,7 +127,7 @@ ADDRESS_STOP_MARKERS = [
     "newsat",
     "dbs group",
     "integrated-report",
-}
+]
 
 ADDRESS_PREFIXES = {
     "avenue",
