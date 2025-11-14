@@ -233,30 +233,41 @@ def _extract_terms(query: str) -> Dict[str, Any]:
     slug_tokens = [
         tok
         for tok in address_tokens
-        if tok not in STOPWORDS
-        or tok in ADDRESS_LEADS
-        or tok in ADDRESS_CONNECTORS
-        or NUMERIC_PATTERN.match(tok)
+        if tok
+        and (
+            tok not in STOPWORDS
+            or tok in ADDRESS_LEADS
+            or tok in ADDRESS_CONNECTORS
+            or NUMERIC_PATTERN.match(tok)
+        )
+        and (len(tok) > 1 or tok.isdigit())
     ]
     if normalized_commune:
         slug_tokens.append(normalized_commune)
     property_slug_source = " ".join(slug_tokens or address_tokens)
     property_slug = _slugify(property_slug_source) or _slugify(normalized)
 
-    pattern_tokens = address_tokens.copy()
+    keywords = [
+        tok
+        for tok in address_tokens
+        if tok
+        and (
+            tok not in STOPWORDS
+            or tok in ADDRESS_LEADS
+            or NUMERIC_PATTERN.match(tok)
+        )
+        and (len(tok) > 1 or tok.isdigit())
+    ]
+    if commune_slug and commune_slug not in keywords:
+        keywords.append(commune_slug)
+
+    pattern_tokens = keywords.copy()
     if normalized_commune and normalized_commune not in pattern_tokens:
         pattern_tokens.append(normalized_commune)
 
     pattern_tokens = [tok for tok in pattern_tokens if tok]
     file_pattern = "%" + "%".join(pattern_tokens) + "%" if pattern_tokens else ""
 
-    keywords = [
-        tok
-        for tok in address_tokens
-        if tok not in STOPWORDS or tok in ADDRESS_LEADS or NUMERIC_PATTERN.match(tok)
-    ]
-    if commune_slug and commune_slug not in keywords:
-        keywords.append(commune_slug)
     term = " ".join(pattern_tokens).strip() or normalized
 
     street_number = ""
@@ -661,31 +672,107 @@ class SynthesisStrategy(BaseStrategy):
         land = LandRegistryStrategy().build_plan(query, context)
         stakeholder = StakeholderStrategy().build_plan(query, context)
 
+        async def property_details_runner(ctx: ExecutionContext) -> Dict[str, Any]:
+            summary = ctx.memory.get("factual_summary") or {}
+            properties = (
+                summary.get("details", {}).get("properties", [])
+                if isinstance(summary, dict)
+                else []
+            )
+            details = []
+            seen: set[str] = set()
+            for prop in properties[:5]:
+                if not isinstance(prop, dict):
+                    continue
+                key = prop.get("property_key")
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                raw = await ctx.call_tool(
+                    "get_property_insight",
+                    {
+                        "property_key": key,
+                        "include_documents": True,
+                        "include_etat_locatif": True,
+                    },
+                )
+                payload = _parse_tool_payload(raw)
+                if payload:
+                    details.append({"property_key": key, "payload": payload})
+            ctx.memory["property_details"] = {"properties": details}
+            return {"properties": details}
+
+        async def stakeholder_details_runner(ctx: ExecutionContext) -> Dict[str, Any]:
+            summary = ctx.memory.get("stakeholder_summary") or {}
+            stakeholders = (
+                summary.get("details", {}).get("stakeholders", [])
+                if isinstance(summary, dict)
+                else []
+            )
+            details = []
+            seen: set[str] = set()
+            for entry in stakeholders[:5]:
+                if not isinstance(entry, dict):
+                    continue
+                name = entry.get("stakeholder_name") or entry.get("stakeholder")
+                if not name or name in seen:
+                    continue
+                seen.add(name)
+                raw = await ctx.call_tool(
+                    "get_stakeholder_profile",
+                    {"name": name, "include_properties": True},
+                )
+                payload = _parse_tool_payload(raw)
+                if payload:
+                    details.append({"stakeholder": name, "payload": payload})
+            ctx.memory["stakeholder_details"] = {"stakeholders": details}
+            return {"stakeholders": details}
+
+        def _parse_tool_payload(raw: Any) -> Optional[Dict[str, Any]]:
+            if raw is None:
+                return None
+            if isinstance(raw, str):
+                try:
+                    parsed = json.loads(raw)
+                except Exception:
+                    return None
+            elif isinstance(raw, dict):
+                parsed = raw
+            else:
+                return None
+            if isinstance(parsed, dict):
+                if parsed.get("success") is False:
+                    return None
+                return parsed.get("data") or parsed
+            return None
+
+        property_details_step = ExecutionStep(
+            name="property_details",
+            func=property_details_runner,
+            description="Collecte détaillée des fiches immeuble",
+        )
+
+        stakeholder_details_step = ExecutionStep(
+            name="stakeholder_details",
+            func=stakeholder_details_runner,
+            description="Profilage détaillé des stakeholders",
+        )
+
         synthesis_step = _make_aggregate_step(
             "synthesis_summary",
             lambda ctx: {
-                "summary": f"Synthèse multi-volets pour '{query}'.",
-                "details": {
-                    "factual": ctx.memory.get("factual_summary"),
-                    "financial": ctx.memory.get("financial_summary"),
-                    "comparative": ctx.memory.get("comparative_summary"),
-                    "land_registry": ctx.memory.get("land_registry_summary"),
-                    "stakeholders": ctx.memory.get("stakeholder_summary"),
-                },
-                "metrics": [],
-                "sources": _collect_sources(
-                    ctx.memory.get("factual_summary"),
-                    ctx.memory.get("financial_summary"),
-                    ctx.memory.get("comparative_summary"),
-                    ctx.memory.get("land_registry_summary"),
-                    ctx.memory.get("stakeholder_summary"),
-                ),
+                "summary": _build_synthesis_summary(ctx, query),
             },
         )
 
         phases: List[List[ExecutionStep]] = []
-        for plan in (factual, financial, comparative, land, stakeholder):
-            phases.extend(plan.phases)
+        phases.extend(factual.phases)
+        phases.append([property_details_step])
+        phases.extend(financial.phases)
+        phases.extend(comparative.phases)
+        phases.extend(land.phases)
+        phases.extend(stakeholder.phases)
+        phases.append([stakeholder_details_step])
         phases.append([synthesis_step])
 
         return ExecutionPlan(
@@ -700,7 +787,144 @@ class SynthesisStrategy(BaseStrategy):
                 land.confidence_threshold,
                 stakeholder.confidence_threshold,
             ),
+            metadata={"strategy": "synthesis", "query": query},
         )
+
+
+def _build_synthesis_summary(ctx: ExecutionContext, query: str) -> Dict[str, Any]:
+    factual = ctx.memory.get("factual_summary") or {}
+    financial = ctx.memory.get("financial_summary") or {}
+    comparative = ctx.memory.get("comparative_summary") or {}
+    land = ctx.memory.get("land_registry_summary") or {}
+    stakeholders = ctx.memory.get("stakeholder_summary") or {}
+    property_details = ctx.memory.get("property_details") or {}
+    stakeholder_details = ctx.memory.get("stakeholder_details") or {}
+
+    properties_payload = []
+    financial_rollup_total = 0.0
+    financial_rollup_base = 0.0
+    vacancy_flags: List[Dict[str, Any]] = []
+    documents_payload = []
+
+    for entry in property_details.get("properties", []):
+        if not isinstance(entry, dict):
+            continue
+        key = entry.get("property_key")
+        payload = entry.get("payload") or {}
+        property_info = payload.get("property") or {}
+        etat = payload.get("etat_locatif") or {}
+        documents = payload.get("documents") or []
+        for doc in documents:
+            if not isinstance(doc, dict):
+                continue
+            doc_entry = {
+                "file_name": doc.get("file_name"),
+                "document_id": doc.get("id"),
+                "summary": doc.get("summary"),
+                "updated_at": doc.get("updated_at"),
+                "source": key,
+            }
+            if doc_entry not in documents_payload:
+                documents_payload.append(doc_entry)
+        rent_total = (
+            property_info.get("rent_total_chf")
+            or (etat.get("loyer_annuel_total"))
+            or 0.0
+        )
+        rent_principal = property_info.get("rent_principal_chf") or 0.0
+        try:
+            rent_total = float(rent_total or 0.0)
+        except (TypeError, ValueError):
+            rent_total = 0.0
+        try:
+            rent_principal = float(rent_principal or 0.0)
+        except (TypeError, ValueError):
+            rent_principal = 0.0
+        financial_rollup_total += rent_total
+        financial_rollup_base += rent_principal
+
+        if etat:
+            vacance = etat.get("taux_vacance_financier")
+            try:
+                vacance = float(vacance)
+            except (TypeError, ValueError):
+                vacance = None
+            if vacance and vacance > 0.1:
+                vacancy_flags.append(
+                    {
+                        "property_key": key,
+                        "taux_vacance_financier": vacance,
+                        "nb_unites_vacantes": etat.get("nb_unites_vacantes"),
+                        "nb_unites_louees": etat.get("nb_unites_louees"),
+                    }
+                )
+
+        properties_payload.append(
+            {
+                "property_key": key,
+                "addresses": property_info.get("addresses"),
+                "cantons": property_info.get("cantons"),
+                "communes": property_info.get("communes"),
+                "postal_codes": property_info.get("postal_codes"),
+                "document_count": property_info.get("document_count"),
+                "rent_total_chf": rent_total,
+                "rent_principal_chf": rent_principal,
+                "etat_locatif": etat,
+            }
+        )
+
+    stakeholder_payload = stakeholder_details.get("stakeholders") or []
+
+    metrics = {
+        "property_count": len(properties_payload),
+        "document_count": len(documents_payload),
+        "stakeholder_count": len(stakeholder_payload),
+        "rent_total_chf": round(financial_rollup_total, 2),
+        "rent_principal_chf": round(financial_rollup_base, 2),
+    }
+
+    summary_lines = [
+        f"Analyse exhaustive pour « {query} »",
+        f"- Propriétés identifiées : {metrics['property_count']}",
+        f"- Documents indexés : {metrics['document_count']}",
+        f"- Loyers annuels (totaux estimés) : {metrics['rent_total_chf']:.2f} CHF",
+    ]
+    if vacancy_flags:
+        summary_lines.append(
+            f"- Risques vacance : {len(vacancy_flags)} propriétés dépassent 10% de vacance"
+        )
+
+    sources = _collect_sources(factual, financial, comparative, land, stakeholders)
+    for entry in properties_payload:
+        key = entry.get("property_key")
+        if key:
+            pk_source = f"property:{key}"
+            if pk_source not in sources:
+                sources.append(pk_source)
+    for doc in documents_payload:
+        file_name = doc.get("file_name")
+        if file_name:
+            doc_source = f"doc:{file_name}"
+            if doc_source not in sources:
+                sources.append(doc_source)
+
+    return {
+        "summary": "\n".join(summary_lines),
+        "details": {
+            "factual": factual,
+            "financial": financial,
+            "comparative": comparative,
+            "land_registry": land,
+            "stakeholders": stakeholders,
+            "properties": properties_payload,
+            "property_details": property_details,
+            "stakeholder_details": stakeholder_payload,
+            "documents": documents_payload,
+            "vacancy_flags": vacancy_flags,
+        },
+        "metrics": metrics,
+        "sources": sources,
+    }
 
 
 STRATEGIES: Dict[str, BaseStrategy] = {
